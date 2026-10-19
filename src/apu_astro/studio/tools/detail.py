@@ -13,6 +13,9 @@ from . import T, Ctx, Tool, register, section, slider, toggle
 # ---------------------------------------------------------------------- 反摺積
 
 
+GUARD_SNR = 300.0   # 反摺積：星心比背景亮這麼多倍噪聲的星不做（見 apply 的保護）
+
+
 class Deconvolution(Tool):
     kind = "deconv"
     title = T("反摺積", "Deconvolution")
@@ -80,6 +83,23 @@ class Deconvolution(Tool):
             snr = (ops.blur(L, 1.5) - sky) / max(sig * 0.6, 1e-9)
             faint = (1 - guard) + guard * ops.smoothstep(1.0, 5.0, snr)
         keep = 1 - ops.blur((~valid).astype(np.float32), 1.0) if valid is not None else 1.0
+        # 保護大星與飽和星（兩段都要）：變圓那段在亮星上會振鈴，長軸方向星核外 4～6 px 掉到幾乎背景、7～8 px 又亮起來，
+        # 銳化再放大，成品每顆亮星一個甜甜圈（LBN576，2026-10-19；以前只保護銳化那段）。亮星維持原本的形狀
+        guard_zone = 0.0
+        if params.get("protect", True) and len(stars.y):
+            lab, n = ndimage.label(stars.mask)
+            cy = np.clip(np.round(stars.y).astype(int), 0, L.shape[0] - 1)
+            cx = np.clip(np.round(stars.x).astype(int), 0, L.shape[1] - 1)
+            # 亮星：星心比背景亮 GUARD_SNR 倍噪聲（振鈴跟訊噪比有關；這顆甜甜圈星不飽和、找星的範圍也不大）
+            snr = (L[cy, cx] - sky) / max(ops.pixel_noise(L), 1e-12)
+            big = (stars.radius > 6.0 / max(ctx.scale, 1e-6)) | stars.saturated | sat[cy, cx] | (snr > GUARD_SNR)
+            if big.any() and n:
+                bad = np.zeros(n + 1, bool)
+                bad[lab[cy[big], cx[big]]] = True
+                bad[0] = False
+                # 範圍再往外擴：找星的範圍只到星核（8 px 以下的結構），振鈴在星核外 4～8 px
+                region = ndimage.binary_dilation(bad[lab], iterations=max(2, int(round(6 / max(ctx.scale, 1e-6)))))
+                guard_zone = ops.blur(region.astype(np.float32), 2.0 / max(ctx.scale, 1e-6))
         L0 = L
         if round_at is not None:
             # 第一段：變圓。核只有長軸方向多出來的那部分，星點上全部套用（只把長軸縮到跟短軸一樣，星不會變小）；
@@ -87,24 +107,13 @@ class Deconvolution(Tool):
             x = np.maximum(L - pedestal, 1e-6).astype(np.float32)
             R = psf.tiled_rl(x, round_at, 20, valid, tile=tile, pad=pad, cancel=ctx.cancel) + pedestal
             ctx.check()
-            a_round = (W + (1 - W) * nebula * faint) * keep
+            a_round = (W + (1 - W) * nebula * faint) * keep * (1 - guard_zone)
             L = L + (R - L) * a_round
         # 第二段：銳化（圓形核，短軸的 0.8 倍）
         x = np.maximum(L - pedestal, 1e-6).astype(np.float32)
         D = psf.tiled_rl(x, sharp_at, iters, valid, tile=tile, pad=pad, cancel=ctx.cancel) + pedestal
         ctx.check()
-        amount = (W * float(params.get("stars", 0.6)) + (1 - W) * nebula) * faint * keep
-        if params.get("protect", True) and len(stars.y):
-            lab, n = ndimage.label(stars.mask)
-            cy = np.clip(np.round(stars.y).astype(int), 0, L.shape[0] - 1)
-            cx = np.clip(np.round(stars.x).astype(int), 0, L.shape[1] - 1)
-            big = (stars.radius > 6.0 / max(ctx.scale, 1e-6)) | stars.saturated | sat[cy, cx]
-            if big.any() and n:
-                bad = np.zeros(n + 1, bool)
-                bad[lab[cy[big], cx[big]]] = True
-                bad[0] = False
-                region = ndimage.binary_dilation(bad[lab], iterations=2)
-                amount *= 1 - ops.blur(region.astype(np.float32), 2.0)
+        amount = (W * float(params.get("stars", 0.6)) + (1 - W) * nebula) * faint * keep * (1 - guard_zone)
         newL = L + (D - L) * amount
         # 防振鈴：不准比局部背景低 1σ 以上（原圖本來就比較暗的地方不准更暗）。反摺積會在星點旁邊挖出一圈暗環
         # （疊圖時的插值振鈴本來就有一點，LBN576 校色後 −2σ，反摺積後變 −4σ），AI 降噪後很明顯，
@@ -145,7 +154,8 @@ class Deconvolution(Tool):
                 c = psf.cov_in_frame(grid, oy + y * ctx.scale, ox + x * ctx.scale, ctx.frame_ops)
                 covs[key] = (grid.overall.cov() if c is None else c) / s2
             return covs[key]
-        cells = [c for row in grid.cells for c in row if c is not None]
+        # 每一區都沒有量到（影像小、星少）時用整張的（以前會當掉：max() 空的）
+        cells = [c for row in grid.cells for c in row if c is not None] or [grid.overall]
         ctx.view["psf_fwhm_full"] = round(float(np.median([c.fwhm_minor for c in cells])) * pdetail.PSF_CORE_LIMIT, 2)
         ctx.view["psf_ellipticity_max"] = round(max(c.ellipticity for c in cells), 2)
         round_at = (lambda y, x: psf.round_kernel(cov(y, x))) if params.get("round", True) else None

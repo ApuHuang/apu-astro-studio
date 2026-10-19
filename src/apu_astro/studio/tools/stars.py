@@ -674,8 +674,13 @@ class StarSplit(Tool):
         edge = ops.smoothstep(0.0, 4.0 / ctx.scale, dist).astype(np.float32)
         layers = []
         for c in range(img.shape[0]):
-            r = np.maximum(resid[c], 0)
-            soft = r * r / (r + ops.pixel_noise(img[c]) + 1e-12) * edge
+            # 淡的部分（幾倍噪聲以內）先模糊再取：星點外圍那圈光只有幾個 σ，噪聲一抖一半的像素變 0，星點層拉伸很強，
+            # 外圍變成亮暗交錯的一圈碎點、合成後像黑圈（LBN576 亮星，2026-10-19）。亮的星核照原本的值，不會變糊
+            n = ops.pixel_noise(img[c])
+            rb = ops.blur(resid[c].astype(np.float32), 1.2 / ctx.scale)
+            sharp = ops.smoothstep(3.0 * n, 12.0 * n, rb)
+            r = np.maximum(resid[c] * sharp + rb * (1.0 - sharp), 0)
+            soft = r * r / (r + n + 1e-12) * edge
             if halos is not None:
                 soft += halos[c] * (1.0 - edge)
             layers.append(soft)

@@ -16,10 +16,10 @@ from ..ui.var import Var
 from ..ui.widgets import Switch, label
 
 LAYER_TEXT = {"starless": T("無星", "Starless"), "stars": T("星點", "Stars"), "main": T("整張", "All")}
-# 去星／合成星點不在選單裡（2026-10-18 先不放：無星圖還不能單獨用）；舊專案檔裡有的照樣能開、能算
 GROUPS = [
-    (T("拉伸前", "Linear"), ["geometry", "gradient", "color_cal", "deconv", "ai_denoise", "denoise", "stretch"]),
-    (T("拉伸後", "Stretched"), ["color_grade", "curves", "sharpen", "denoise"]),
+    (T("拉伸前", "Linear"), ["geometry", "gradient", "color_cal", "deconv", "star_split", "ai_denoise", "denoise",
+                            "stretch"]),
+    (T("拉伸後", "Stretched"), ["color_grade", "curves", "sharpen", "denoise", "star_merge"]),
 ]
 
 

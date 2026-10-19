@@ -66,8 +66,8 @@ def smoke_test(folder: str, out: str, expect_gpu: bool) -> int:
             master = res.output
             lines.append(f"{mode}:frames={res.qc['frames_integrated']}")
 
-        # 後製工作室：預設流程（去光梯度 → 校色 → 反摺積 →（AI）降噪 → 拉伸 → 調色 → 銳化 → 再降噪），
-        # 預設關著的步驟也打開一起跑
+        # 後製工作室：預設流程（去光梯度 → 校色 → 反摺積 → AI 降噪 → 去星 → 降噪 → 分開拉伸 → 調色 → 銳化 → 合成星點）；
+        # 有預設關著的步驟也打開一起跑
         from apu_astro.studio import chain as ch
         from apu_astro.studio import export, xisf
         from apu_astro.studio.tools import ai

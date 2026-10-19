@@ -287,7 +287,8 @@ class AIDenoise(Tool):
     icon = "denoise"
 
     def defaults(self) -> dict:
-        return {"amount": 0.85, "mottle": True, "chroma": True}
+        # 去斑、色彩降噪預設關（2026-10-19 使用者試過，覺得沒有它們的第一版效果最好）
+        return {"amount": 0.85, "mottle": False, "chroma": False}
 
     def controls(self) -> list[dict]:
         return [slider("amount", T("強度", "Amount"), 0, 1, 0.05, "{:.0%}",
@@ -345,8 +346,8 @@ class AIDenoise(Tool):
         # 縮小再跑的那層：快速預覽本身已經縮小（一個像素＝完整尺寸 4 px），斑駁在快速預覽上就是細顆粒，不用再跑
         # 色彩降噪也只在完整解析度做（快速預覽縮小時色彩噪聲已經平均掉了）
         full = ctx.scale < 1.5
-        coarse = COARSE if full and params.get("mottle", True) else ()
-        chroma = CHROMA_SIGMA / ctx.scale if full and params.get("chroma", True) else 0.0
+        coarse = COARSE if full and params.get("mottle", False) else ()
+        chroma = CHROMA_SIGMA / ctx.scale if full and params.get("chroma", False) else 0.0
         _fixed, outs, n_dark = denoise_planes([(img[c] - sky) / sig for c, (sky, sig) in enumerate(units)],
                                               amount, ctx, coarse=coarse, chroma=chroma)
         ctx.view["dark_fixed"] = n_dark

@@ -71,13 +71,11 @@ def new_step(kind: str, layer: str = "auto", **params) -> Step:
 
 
 def default_steps(color: bool, narrowband: str | None = None) -> list[Step]:
-    """使用者的流程：裁切 → 去光梯度 → 校色 → 反摺積 → 降噪 → 拉伸 → 調色 → 銳化 → 再降噪。
-    一步一步修：拉伸（含）以前打開，後面的步驟列出來但先關著，要用再打開（2026-10-18 使用者選的做法）。
-    不拔星（傳統去星的無星圖縮星後會露出補痕，2026-10-18 使用者決定先不放），拉伸以後的步驟要顧到星點：
-    銳化預設避開星點（不然星點旁邊一圈暗環），調色用自然飽和度（加飽和會讓星點一圈色環）。
-    降噪：AI（反摺積之後：反摺積要原本的噪聲判斷哪裡該做），含縮小一半那層去斑駁；沒有模型時才用一般降噪。
-    一般降噪（Processing）在 AI 去斑之後對斑駁沒有幫助、還會吃暗星，作用在有星的整張上星點周圍有一圈暗環
-    （2026-10-19 使用者同意拿掉）。拉伸深淺不受降噪影響（見 tools/__init__.py 的 DENOISE_SIGMA_FACTOR）。"""
+    """使用者的流程：去光梯度 → 校色 → 反摺積 →（AI 降噪）→ 去星 → 降噪 → 分開拉伸 → 調色 → 銳化 → 再降噪 → 合成星點。
+    2026-10-19 使用者試過幾種之後，覺得 10/18 最早放 AI 的這版效果最好，改回來（中間試過：不拔星、合併拉伸、拉伸後的
+    步驟先關著、AI 去斑與色彩降噪；那些工具／選項都還在，只是預設不用）。
+    AI 降噪在有模型時才放：反摺積之後（反摺積要原本的噪聲判斷哪裡該做）、去星之前（去星在乾淨的影像上找星比較準）。
+    放了 AI 之後拉伸深淺、去星的範圍都不變（降噪的影響會被抵銷，見 tools/__init__.py 的 DENOISE_SIGMA_FACTOR）。"""
     from .tools import ai as tai
     steps = [new_step("geometry", auto_edges=True), new_step("gradient")]
     if color:
@@ -85,18 +83,23 @@ def default_steps(color: bool, narrowband: str | None = None) -> list[Step]:
         cal.enabled = narrowband is None
         steps.append(cal)
     steps.append(new_step("deconv"))
-    steps.append(new_step("ai_denoise") if tai.available() else new_step("denoise", amount=0.5))
-    steps.append(new_step("stretch", method="auto"))
-    later = []
+    if tai.available():
+        steps.append(new_step("ai_denoise"))
+    steps += [
+        new_step("star_split"),
+        new_step("denoise", "starless", amount=0.5),
+        new_step("stretch", "starless", method="auto"),
+        new_step("stretch", "stars", method="arcsinh"),
+    ]
     if color:
         palette = {"SHO": "sho_gold", "HOO": "hoo"}.get(narrowband or "", "none")
-        later.append(new_step("color_grade", palette=palette, vibrance=0.2))
-    sharpen = new_step("sharpen")
-    sharpen.mask = {**masks.default_mask(), "mode": "nostars", "feather": 2.0}
-    later += [sharpen, new_step("denoise", amount=0.3, luminance=0.8, chroma=1.2)]
-    for s in later:
-        s.enabled = False
-    return steps + later
+        steps.append(new_step("color_grade", "starless", palette=palette, vibrance=0.2))
+    steps += [
+        new_step("sharpen", "starless"),
+        new_step("denoise", "starless", amount=0.3, luminance=0.8, chroma=1.2),
+        new_step("star_merge", saturation=0.8 if narrowband else 1.2, demagenta=0.8 if narrowband else 0.0),
+    ]
+    return steps
 
 
 # ---------------------------------------------------------------------- 來源

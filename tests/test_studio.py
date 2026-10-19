@@ -79,13 +79,9 @@ def _chain(color=True) -> ch.Chain:
 def test_default_workflow_runs():
     c = _chain()
     kinds = [s.kind for s in c.steps]
-    # 不拔星；拉伸（含）以前打開，後面的先關著（一步一步修）
-    assert "star_split" not in kinds and "star_merge" not in kinds
-    st = kinds.index("stretch")
-    assert all(s.enabled for s in c.steps[:st + 1]) and not any(s.enabled for s in c.steps[st + 1:])
-    assert c.steps[kinds.index("sharpen")].mask["mode"] == "nostars"
-    for s in c.steps:
-        s.enabled = True
+    # 10/18 的流程：去星 → 分開拉伸 → 合成星點，全部打開
+    assert kinds.index("star_split") < kinds.index("stretch") < kinds.index("star_merge") == len(kinds) - 1
+    assert all(s.enabled for s in c.steps)
     r = c.evaluate(len(c.steps) - 1, "full")
     assert list(r.state.layers) == ["main"] and r.state.phase["main"] == "nonlinear"
     out = r.state.layers["main"]
@@ -334,7 +330,8 @@ def test_denoise_does_not_change_stretch_strength():
     assert abs(medians[0][0] - medians[1][0]) < 0.03 and abs(medians[0][1] - medians[1][1]) < 0.05
 
 
-def _elliptical_field(h=600, w=800, cov=((4.0, 1.2), (1.2, 2.6)), shift_r=(0.0, 0.0), sat_level=None, seed=1):
+def _elliptical_field(h=600, w=800, cov=((4.0, 1.2), (1.2, 2.6)), shift_r=(0.0, 0.0), sat_level=None, seed=1,
+                      noise=0.0015):
     """合成星場：橢圓高斯星點（共變異數 cov，x/y 順序）；紅色版可以整體位移；可以把亮星截平成飽和。"""
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
@@ -346,7 +343,7 @@ def _elliptical_field(h=600, w=800, cov=((4.0, 1.2), (1.2, 2.6)), shift_r=(0.0, 
             dy, dx = yy - cy - (shift_r[0] if c == 0 else 0), xx - cx - (shift_r[1] if c == 0 else 0)
             q = inv[0, 0] * dx * dx + 2 * inv[0, 1] * dx * dy + inv[1, 1] * dy * dy
             planes[c] += f * np.exp(-0.5 * q)
-    planes += rng.normal(0, 0.0015, planes.shape)
+    planes += rng.normal(0, noise, planes.shape)
     if sat_level is not None:
         planes = np.minimum(planes, sat_level)
     return planes.astype(np.float32)
@@ -378,7 +375,8 @@ def test_channel_alignment_fixes_offset():
 
 def test_deconvolution_makes_stars_round_without_donuts():
     from apu_astro.studio import psf
-    img = _elliptical_field(sat_level=0.45)
+    # 噪聲大一點：星心最多 150 倍噪聲，在 GUARD_SNR（300）以下才會變圓；更亮的星不做（會振鈴，見下一個測試）
+    img = _elliptical_field(sat_level=0.45, noise=0.003)
     src = ch.Source([Path("synthetic.fits")], image=img)
     c = ch.Chain()
     c.set_source(src)
@@ -393,6 +391,42 @@ def test_deconvolution_makes_stars_round_without_donuts():
     for i in range(1, n + 1):
         core = lab == i
         assert float(out.mean(axis=0)[core].min()) >= 0.95 * float(img.mean(axis=0)[core].min())
+
+
+def test_deconvolution_leaves_bright_stars_without_ring():
+    """很亮的星（星心比背景亮幾千倍噪聲）：變圓那段會振鈴，長軸方向星核外先掉下去再亮起來一圈，拉伸後就是甜甜圈
+    （LBN576）。用 Moffat 形狀的橢圓星（高斯星跟反摺積的模型一樣，不會振鈴）：沿長軸往外不准變亮超過 3 倍噪聲。"""
+    from apu_processing import detail as pdetail
+    rng = np.random.default_rng(4)
+    h = w = 320
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+    img = np.full((h, w), 0.02)
+
+    def moffat(cy, cx, f):
+        return f * (1 + ((xx - cx) / 3.5) ** 2 + ((yy - cy) / 2.0) ** 2) ** -2.5
+    for _ in range(12):
+        img += moffat(rng.uniform(30, h - 30), rng.uniform(30, w - 30), rng.uniform(0.05, 0.8))
+    for _ in range(80):                                # 暗星（量星點形狀用）
+        img += moffat(rng.uniform(10, h - 10), rng.uniform(10, w - 10), rng.uniform(0.005, 0.04))
+    noise = 0.0002
+    img = np.stack([img + rng.normal(0, noise, img.shape)] * 3).astype(np.float32)
+    src = ch.Source([Path("synthetic.fits")], image=img)
+    c = ch.Chain()
+    c.set_source(src)
+    c.steps = [ch.new_step("deconv")]
+    out = c.evaluate(0, "full").state.layers["main"].mean(axis=0)
+    L = img.mean(axis=0)
+    st = pdetail.find_stars(L)
+    order = np.argsort(-L[np.round(st.y).astype(int), np.round(st.x).astype(int)])
+    checked = 0
+    for i in order[:6]:
+        y, x = int(round(st.y[i])), int(round(st.x[i]))
+        if not (20 <= y < h - 20 and 20 <= x < w - 20):
+            continue
+        prof = out[y, x:x + 14]                        # 長軸（x 方向）
+        assert float(np.max(np.diff(prof))) < 3 * noise, prof
+        checked += 1
+    assert checked >= 3
 
 
 def ndimage_label(m):
