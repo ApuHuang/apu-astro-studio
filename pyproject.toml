@@ -1,0 +1,32 @@
+[project]
+name = "apu-astro"
+dynamic = ["version"]
+description = "APU Astro：挑片（APU Pick）、疊圖（APU Photons）、後製（APU Processing）整合成一套的 Qt 版"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+# 三個原本的專案用 editable 安裝本機的 repo（見 README），這裡只列整合版自己用到的
+dependencies = ["PySide6>=6.7", "pyqtgraph>=0.13", "numpy>=1.26", "pillow>=10",
+                "apu-pick", "apu-photons", "apu-processing"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+exe = ["pyinstaller>=6.0"]
+
+[project.gui-scripts]
+apu-astro = "apu_astro.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "apu_astro.__version__"}
+
+[tool.setuptools.package-data]
+apu_astro = ["assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
