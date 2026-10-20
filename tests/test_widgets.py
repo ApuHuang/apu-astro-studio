@@ -74,3 +74,11 @@ def test_imageview_coordinates_and_crop(app):
     cx, cy, z = view.cx, view.cy, view.zoom
     view.set_image(img[:, ::4, ::4], keep_view=True, pixel_scale=4)
     assert (view.cx, view.cy, view.zoom) == (cx, cy, z)
+    # 自動裁邊在快速預覽上會差幾個像素（149×199 × 4 對 600×800）：還是同一張，縮放與位置不變
+    view.set_image(np.ascontiguousarray(img[:, :149, :199]), keep_view=True, pixel_scale=4)
+    assert (view.cx, view.cy, view.zoom) == (cx, cy, z)
+    view.set_image(img, keep_view=True)
+    assert (view.cx, view.cy, view.zoom) == (cx, cy, z)
+    # 真的換了大小（例如裁掉一大塊）才回到整張
+    view.set_image(img[:, :300, :400], keep_view=True)
+    assert view.zoom is None

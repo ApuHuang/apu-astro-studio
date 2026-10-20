@@ -21,6 +21,9 @@ from ..theme import D, fonts
 
 PREVIEW_LONG_SIDE = 2560
 MIN_ZOOM, MAX_ZOOM = 0.02, 16.0
+# 新影像的尺寸跟目前的差在這個比例以內就當成同一張（保留縮放與位置）：自動裁疊圖邊緣在快速預覽上量的邊
+# 會跟完整解析度差幾個像素（LBN576 加邊緣：2244×1492 對 2246×1496），以前差超過 1 px 就重設，改數值後縮放就跳回整張
+SAME_FRAME = 0.01
 
 
 def area_downsample(image: np.ndarray, long_side: int) -> tuple[np.ndarray, float]:
@@ -190,9 +193,12 @@ class ImageView(QWidget):
         self.preview, self.preview_factor = area_downsample(self.full, PREVIEW_LONG_SIDE)
         self._revision += 1
         new = self.full_size()
-        if not keep_view or old == (0.0, 0.0) or abs(old[0] - new[0]) > 1 or abs(old[1] - new[1]) > 1:
+        same = all(abs(o - n) <= max(1.0, SAME_FRAME * n) for o, n in zip(old, new))
+        if not keep_view or old == (0.0, 0.0) or not same:
             self.zoom = None
             self.cx, self.cy = new[0] / 2, new[1] / 2
+        else:
+            self.cx, self.cy = min(max(self.cx, 0.0), new[0]), min(max(self.cy, 0.0), new[1])
         self._emit_zoom()
         self.update()
 
