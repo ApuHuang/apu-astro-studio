@@ -13,6 +13,7 @@ guard＝推論時再做一次高通（舊模型用；現在的模型已經內建
 
 from __future__ import annotations
 
+import json
 import math
 import threading
 from pathlib import Path
@@ -24,8 +25,10 @@ from .. import backend, ops
 from . import T, Ctx, Tool, record_denoise_ratio, register, slider, toggle
 
 MODEL = Path(__file__).resolve().parents[2] / "assets" / "n2n.onnx"
+MODEL_RGB = Path(__file__).resolve().parents[2] / "assets" / "n2n_rgb.onnx"   # 彩色：三個色版一起看（有的話）
 GUARD_SIGMA = 3.0
 _session = None
+_session_rgb = None
 _session_lock = threading.Lock()
 
 
@@ -33,21 +36,58 @@ def available() -> bool:
     return MODEL.is_file()
 
 
+def available_rgb() -> bool:
+    return MODEL_RGB.is_file()
+
+
+def _open(path: Path):
+    import onnxruntime as ort
+    opts = ort.SessionOptions()
+    opts.log_severity_level = 3
+    providers = [p for p in ("DmlExecutionProvider", "CPUExecutionProvider") if p in ort.get_available_providers()]
+    return ort.InferenceSession(str(path), opts, providers=providers)
+
+
 def session():
     global _session
     with _session_lock:
         if _session is None:
-            import onnxruntime as ort
-            opts = ort.SessionOptions()
-            opts.log_severity_level = 3
-            providers = [p for p in ("DmlExecutionProvider", "CPUExecutionProvider") if p in ort.get_available_providers()]
-            _session = ort.InferenceSession(str(MODEL), opts, providers=providers)
+            _session = _open(MODEL)
     return _session
 
 
-def sky_sigma(a: np.ndarray) -> tuple[float, float]:
+def session_rgb():
+    global _session_rgb
+    with _session_lock:
+        if _session_rgb is None:
+            _session_rgb = _open(MODEL_RGB)
+    return _session_rgb
+
+
+_noise_dist_cache: dict[str, int] = {}
+
+
+def noise_dist() -> int:
+    """模型訓練時量噪聲用相隔幾列的像素差（模型旁邊的 n2n.json；沒有＝1，相鄰像素，第八版）。
+    推論要跟訓練用一樣的量法，不然噪聲單位不一樣（見 tools/ai/train_n2n.py 的 robust_sky_sigma）。"""
+    key = str(MODEL)
+    if key not in _noise_dist_cache:
+        meta = MODEL.with_suffix(".json")
+        try:
+            _noise_dist_cache[key] = int(json.loads(meta.read_text(encoding="utf-8")).get("noise_dist", 1))
+        except (OSError, ValueError):
+            _noise_dist_cache[key] = 1
+    return _noise_dist_cache[key]
+
+
+def sky_sigma(a: np.ndarray, dist: int | None = None) -> tuple[float, float]:
+    """天空與噪聲 σ。dist：量噪聲用相隔幾列的像素差；預設跟著目前的模型（評估工具比較不同模型時固定用 1）。"""
     sky = float(np.median(a[:: 4, :: 4]))
-    d = (a[1::2, ::2] - a[:-1:2, ::2])[::2, ::2]
+    dist = noise_dist() if dist is None else dist
+    if dist == 1:
+        d = (a[1::2, ::2] - a[:-1:2, ::2])[::2, ::2]
+    else:
+        d = (a[dist:, ::2] - a[:-dist, ::2])[::4, ::2]
     sigma = float(np.median(np.abs(d - np.median(d)))) * 1.4826 / math.sqrt(2)
     return sky, max(sigma, 1e-9)
 
@@ -136,7 +176,7 @@ COARSE_STRUCT = 3.0  # 縮小那層：中尺度的起伏超過斑駁典型起伏
 
 def denoise_planes(xs: list[np.ndarray], amount: float = 1.0, ctx: Ctx | None = None,
                    protect_stars: bool = False, coarse: tuple[int, ...] = (),
-                   chroma: float = 0.0) -> tuple[list[np.ndarray], list[np.ndarray], int]:
+                   chroma: float = 0.0, rgb: bool | None = None) -> tuple[list[np.ndarray], list[np.ndarray], int]:
     """一組色版（各自的噪聲單位）完整的 AI 降噪：補暗點 → 模型 → 亮處淡出 → 去掉淡出造成的低頻。
     淡出權重三色共用（用三色平均的亮度）：各自算的話，偏黃的星系裡紅色版淡出得多、藍色版修得多，星點會變色。
     coarse：再縮小這幾倍各跑一次，只取修正量放大加回去（亮處照完整解析度的亮度淡出）。模型只看得到幾個像素的
@@ -149,11 +189,17 @@ def denoise_planes(xs: list[np.ndarray], amount: float = 1.0, ctx: Ctx | None = 
         f, n = fix_dark_pixels(x)
         fixed.append(f)
         n_dark += n
-    preds = []
-    for i, x in enumerate(fixed):
-        preds.append(denoise_plane(x, ctx))
-        if ctx is not None:
-            ctx.progress((i + 1) / len(fixed), "ai")
+    if rgb is None:
+        rgb = available_rgb()
+    if rgb and len(fixed) == 3:
+        # 彩色模型：三色一起看（分得出三色一起亮的結構和只有一色的噪聲）
+        preds = list(denoise_rgb(np.stack(fixed), ctx))
+    else:
+        preds = []
+        for i, x in enumerate(fixed):
+            preds.append(denoise_plane(x, ctx))
+            if ctx is not None:
+                ctx.progress((i + 1) / len(fixed), "ai")
     w = bright_fade(np.mean(preds, axis=0))
     if protect_stars:
         w = w * (1 - star_protect(fixed))
@@ -235,6 +281,32 @@ def smooth_chroma(outs: list[np.ndarray], sigma: float) -> list[np.ndarray]:
     for o in outs:
         c = (o - L).astype(np.float32)
         out.append((o + (ops.blur(c, sigma) - c) * wgt).astype(np.float32))
+    return out
+
+
+def denoise_rgb(x: np.ndarray, ctx: Ctx | None = None, tile: int = 640, pad: int = 96) -> np.ndarray:
+    """彩色模型：x 是 (3, H, W)、每色已換成自己的噪聲單位。分塊方式跟 denoise_plane 一樣（沒有接縫）。"""
+    sess = session_rgb()
+    _c, h, w = x.shape
+    out = np.empty_like(x, np.float32)
+    n_tiles = ((h + tile - 1) // tile) * ((w + tile - 1) // tile)
+    done = 0
+    for y in range(0, h, tile):
+        for xx in range(0, w, tile):
+            if ctx is not None:
+                ctx.check()
+            y0, x0 = max(0, y - pad), max(0, xx - pad)
+            y1, x1 = min(h, y + tile + pad), min(w, xx + tile + pad)
+            block = np.ascontiguousarray(x[:, y0:y1, x0:x1], np.float32)
+            ph, pw = (-block.shape[1]) % 8, (-block.shape[2]) % 8
+            if ph or pw:
+                block = np.pad(block, ((0, 0), (0, ph), (0, pw)), mode="reflect")
+            res = sess.run(None, {"x": block[None]})[0][0]
+            th, tw = min(tile, h - y), min(tile, w - xx)
+            out[:, y:y + th, xx:xx + tw] = res[:, y - y0:y - y0 + th, xx - x0:xx - x0 + tw]
+            done += 1
+            if ctx is not None:
+                ctx.progress(done / n_tiles, "ai")
     return out
 
 

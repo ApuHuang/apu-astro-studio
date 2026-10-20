@@ -8,6 +8,7 @@
 （底圖就是答案，可以直接量單色窄帶與彩色相機的效果）。
 
 python tools/ai/make_synth.py --out output/ai/synth
+python tools/ai/make_synth.py --rgb --out output/ai/synth_rgb   （彩色模型用：只取彩色 master，三色同位置一起切）
 """
 
 from __future__ import annotations
@@ -82,11 +83,12 @@ def find_masters() -> list[Path]:
     return out
 
 
-def crops_of(path: Path, rng: np.random.Generator) -> np.ndarray | None:
+def crops_of(path: Path, rng: np.random.Generator, rgb: bool = False) -> np.ndarray | None:
+    """rgb：只要彩色的，每塊是 (3, CROP, CROP)（三色同位置）；否則每塊隨機挑一個色版。"""
     data = xisf.to_unit(xisf.read(path))
     p = data if data.ndim == 3 else data[None]
     C, h, w = p.shape
-    if h < CROP * 2 or w < CROP * 2:
+    if h < CROP * 2 or w < CROP * 2 or (rgb and C < 3):
         return None
     norm = np.empty_like(p, dtype=np.float32)
     for c in range(C):
@@ -109,14 +111,18 @@ def crops_of(path: Path, rng: np.random.Generator) -> np.ndarray | None:
         x0 = int(np.clip(cx - CROP // 2, 0, w - CROP))
         if not valid[y0:y0 + CROP, x0:x0 + CROP].all():
             continue
-        c = int(rng.integers(C))
-        out.append(norm[c, y0:y0 + CROP, x0:x0 + CROP])
+        if rgb:
+            out.append(norm[:3, y0:y0 + CROP, x0:x0 + CROP])
+        else:
+            c = int(rng.integers(C))
+            out.append(norm[c, y0:y0 + CROP, x0:x0 + CROP])
     return np.stack(out).astype(np.float16) if out else None
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="output/ai/synth")
+    ap.add_argument("--rgb", action="store_true", help="彩色模型用的三色小塊")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -125,7 +131,7 @@ def main() -> int:
     print(f"{len(masters)} masters", flush=True)
     meta = []
     jobs = [(f"m{i:02d}_" + re.sub(r"[^\w.-]+", "_", target_of(p))[:40], p, False) for i, p in enumerate(masters)]
-    jobs += [(name, Path(p), True) for name, p in VALIDATION.items()]
+    jobs += [(name, Path(p), True) for name, p in VALIDATION.items() if not a.rgb or "OSC" in name]
     for name, path, holdout in jobs:
         dst = out / f"{name}.npy"
         if dst.is_file():
@@ -134,12 +140,12 @@ def main() -> int:
             continue
         t0 = time.time()
         try:
-            arr = crops_of(path, rng)
+            arr = crops_of(path, rng, a.rgb)
         except Exception as exc:  # noqa: BLE001  讀不了的檔案跳過
             print(f"skip {path}: {exc}", flush=True)
             continue
         if arr is None:
-            print(f"skip {path}: too small", flush=True)
+            print(f"skip {path}: too small{' or mono' if a.rgb else ''}", flush=True)
             continue
         np.save(dst, arr)
         meta.append({"name": name, "path": str(path), "n": int(arr.shape[0]), "holdout": holdout})

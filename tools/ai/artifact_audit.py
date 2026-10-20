@@ -73,12 +73,14 @@ def audit(name: str, path: Path, out: Path) -> dict:
     rep = {}
     lowfreq, sat, seam, created, where = [], [], [], [], []
     lf_maps = []
-    planes = []
+    planes, ks = [], []
     for c in range(C):
         sky, sig = ai.sky_sigma(p[c])
         planes.append((p[c] - sky) / sig)
+        ks.append(sig / ai.sky_sigma(p[c], dist=1)[1])   # 量的時候都換成相鄰差的 σ 單位（不同模型的噪聲量法才能比）
     xs, outs, _n = ai.denoise_planes(planes, coarse=COARSE)   # 跟後製工作室的 AI 降噪一樣（強度 100%）
-    for xf, o in zip(xs, outs):
+    for xm, om, k in zip(xs, outs, ks):
+        xf, o = xm * k, om * k
         fix = o - xf
         lf = ndimage.gaussian_filter(fix, 16)
         lf_maps.append(lf)
@@ -87,12 +89,12 @@ def audit(name: str, path: Path, out: Path) -> dict:
         where.append({"y": int(iy), "x": int(ix), "edge_px": int(min(iy, ix, lf.shape[0] - 1 - iy, lf.shape[1] - 1 - ix)),
                       "level": round(float(ndimage.uniform_filter(xf, 32)[iy, ix]), 1),
                       "max_nearby": round(float(xf[max(0, iy - 48):iy + 48, max(0, ix - 48):ix + 48].max()), 0)})
-        s = np.sqrt(1 + ndimage.uniform_filter(np.maximum(xf, 0), 5) / 16)
-        pred_raw = ai.denoise_plane(xf)
-        sat.append(float((np.abs(xf - pred_raw) > 0.95 * MODEL_LIMIT * s).mean() * 100))
+        s = np.sqrt(1 + ndimage.uniform_filter(np.maximum(xm, 0), 5) / 16)     # 頂到上限：用模型自己的單位
+        pred_raw = ai.denoise_plane(xm)
+        sat.append(float((np.abs(xm - pred_raw) > 0.95 * MODEL_LIMIT * s).mean() * 100))
         # 接縫：錯開 256 px 再算；錯開後的圖左上是新的影像邊界，比較時排除四周 160 px
-        shifted = ai.denoise_plane(xf[256:, 256:])
-        dd = np.abs(shifted - pred_raw[256:, 256:])[160:-160, 160:-160]
+        shifted = ai.denoise_plane(xm[256:, 256:])
+        dd = np.abs(shifted - pred_raw[256:, 256:])[160:-160, 160:-160] * k
         seam.append(float(np.quantile(dd, 0.99999)))
         d_in = xf - ndimage.median_filter(xf, 5)
         d_out = o - ndimage.median_filter(o, 5)
@@ -105,7 +107,7 @@ def audit(name: str, path: Path, out: Path) -> dict:
     lfm = np.max(np.abs(np.stack(lf_maps)), axis=0)[::8, ::8]
     imageio.save_display(out / f"{name}_lowfreq.png", np.repeat(np.clip(lfm / 0.3, 0, 1)[None], 3, 0).astype(np.float32))
     if C >= 3:
-        fixes = np.stack([o - x for o, x in zip(outs, xs)])
+        fixes = np.stack([(o - x) * k for o, x, k in zip(outs, xs, ks)])
         chroma = fixes - fixes.mean(axis=0, keepdims=True)
         rep["chroma"] = round(float(max(np.abs(ndimage.gaussian_filter(ch, 8)).max() for ch in chroma)), 3)
     rep["flags"] = [k for k, lim in LIMITS.items() if rep.get(k, 0) > lim]
@@ -135,9 +137,12 @@ def main() -> int:
     ap.add_argument("--out", default="output/ai/audit")
     ap.add_argument("--model", default=None)
     ap.add_argument("--coarse", action="store_true", help="加縮小一半再跑的那層（ai.COARSE）")
+    ap.add_argument("--rgb-model", default=None, help="彩色模型（三色一起看）的 ONNX；給了就用它")
     a = ap.parse_args()
     if a.model:
         ai.MODEL = Path(a.model)
+    if a.rgb_model:
+        ai.MODEL_RGB = Path(a.rgb_model)
     if a.coarse:
         global COARSE
         COARSE = ai.COARSE

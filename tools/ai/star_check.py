@@ -42,13 +42,19 @@ def main() -> int:
     ap.add_argument("--protect", action="store_true")
     ap.add_argument("--coarse", action="store_true", help="跟工作室一樣加去斑那層和色彩降噪")
     ap.add_argument("--processing", action="store_true", help="改用 Processing 的降噪（強度 85%）當對照")
+    ap.add_argument("--rgb-model", default=None, help="彩色模型（三色一起看）的 ONNX；給了就用它")
+    ap.add_argument("--rho", type=float, default=0.0,
+                    help="色版之間噪聲的相關（實拍 OSC 0.4～0.8；0＝各色獨立，跟以前的數字可比）")
+    ap.add_argument("--targets", nargs="*", default=list(TARGETS), help="只跑這幾張（預設全部）")
     a = ap.parse_args()
     if a.model:
         ai.MODEL = Path(a.model)
+    if a.rgb_model:
+        ai.MODEL_RGB = Path(a.rgb_model)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(3)
-    for name in TARGETS:
+    for name in a.targets:
         img, _ = io.load_image(A.find(A.MASTERS[name]))
         p = img if img.ndim == 3 else img[None]
         C, h, w = p.shape
@@ -57,9 +63,12 @@ def main() -> int:
         units = [ai.sky_sigma(p[c]) for c in range(C)]
         truth = [(p[c] - s) / g / 4.0 for c, (s, g) in enumerate(units)]
         noisy = []
+        def unit_noise() -> np.ndarray:
+            n = ndimage.gaussian_filter(rng.standard_normal(truth[0].shape).astype(np.float32), 0.6)
+            return n / n.std()
+        shared = unit_noise() if a.rho > 0 else 0.0
         for t in truth:
-            n = ndimage.gaussian_filter(rng.standard_normal(t.shape).astype(np.float32), 0.6)
-            n /= n.std()
+            n = np.sqrt(1 - a.rho) * unit_noise() + np.sqrt(a.rho) * shared
             noisy.append(t + np.sqrt(1 + np.maximum(t, 0) / 50) * n)
         est = [ai.sky_sigma(x)[1] for x in noisy]
         if a.processing:
@@ -81,6 +90,14 @@ def main() -> int:
                "sky_ai": float(np.sqrt(np.mean(((O - T) / sd)[sky] ** 2))),
                "mottle_in": float(np.sqrt(np.mean(ndimage.gaussian_filter(N - T, 4)[sky] ** 2))),
                "mottle_ai": float(np.sqrt(np.mean(ndimage.gaussian_filter(O - T, 4)[sky] ** 2)))}
+        if C >= 3:   # 天空的色彩誤差（各色減三色平均、模糊 2 px）：彩色小點、色斑
+            def chroma(v: list[np.ndarray]) -> float:
+                e = np.stack(v) - np.mean(v, axis=0) - (np.stack(truth) - T)
+                return float(np.sqrt(np.mean(np.stack([ndimage.gaussian_filter(c, 2) for c in e])[:, sky] ** 2)))
+            res["chroma_in"], res["chroma_ai"] = chroma(noisy), chroma(outs)
+        # 單點：各色版天空誤差超過 1.5σ 的像素（每百萬）；AI 後誤差大約 0.3σ，超過 1.5 的就是留下來的單點
+        res["speck_in"], res["speck_ai"] = (float(np.mean([np.mean(np.abs(v - t)[sky] > 1.5) for v, t in zip(vs, truth)])) * 1e6
+                                            for vs in (noisy, outs))
         stars = pdetail.find_stars(T, 3.0)
         small, big, ein, eai = [], [], [], []
         dense = np.zeros_like(T)
@@ -106,6 +123,9 @@ def main() -> int:
                     eai.append(np.abs((fa[[0, 2]] / fa[1]) / ct - 1).max())
         line = (f"{name:12s} sky {res['sky_in']:.2f}→{res['sky_ai']:.2f}  mottle {res['mottle_in']:.3f}→"
                 f"{res['mottle_ai']:.3f}")
+        line += f"  specks/Mpx {res['speck_in']:.0f}→{res['speck_ai']:.0f}"
+        if "chroma_in" in res:
+            line += f"  chroma {res['chroma_in']:.3f}→{res['chroma_ai']:.3f}"
         if small:
             line += (f"  faint stars {len(small)}: flux small {np.median(small):.2f} (p10 {np.quantile(small, .1):.2f})"
                      f" big {np.median(big):.2f} (p10 {np.quantile(big, .1):.2f})")

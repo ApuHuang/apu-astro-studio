@@ -61,17 +61,26 @@ def multiscale(planes: list[np.ndarray], factors: tuple[int, ...], amount: float
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="output/ai/mottle")
-    ap.add_argument("--variants", nargs="*", default=["raw", "ai", "ai+dn", "ms2", "ms24"])
+    ap.add_argument("--variants", nargs="*", default=["raw", "ai", "ai+dn", "coarse", "tool"])
+    ap.add_argument("--model", default=None, help="用別的 ONNX 模型（例如 output/ai/model_v9a/n2n.onnx）")
+    ap.add_argument("--rgb-model", default=None, help="彩色模型（三色一起看）的 ONNX；給了就用它")
+    ap.add_argument("--set", default=DATA.name, help="output/ai/n2n 裡的驗證組（例如 NGC1893_300s：Photons 疊的 OSC 星雲）")
     a = ap.parse_args()
+    data = DATA.parent / a.set
+    if a.model:
+        ai.MODEL = Path(a.model)
+    if a.rgb_model:
+        ai.MODEL_RGB = Path(a.rgb_model)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    truth = np.load(DATA / "truth.npy").astype(np.float32)
-    A = np.load(DATA / "A_4.npy").astype(np.float32)
+    truth = np.load(data / "truth.npy").astype(np.float32)
+    A = np.load(data / "A_4.npy").astype(np.float32)
     C, h, w = A.shape
     box = (slice(h // 2 - 700, h // 2 + 700), slice(w // 2 - 1000, w // 2 + 1000))
     A, T = A[:, box[0], box[1]], truth[:, box[0], box[1]]
-    units = [ai.sky_sigma(A[c]) for c in range(C)]
-    sig = np.array([g for _, g in units], np.float32)[:, None, None]
+    units = [ai.sky_sigma(A[c]) for c in range(C)]           # 給模型的單位（噪聲量法跟著模型的 n2n.json）
+    # 量誤差的單位一律用相隔 1 列的量法（第八版），不同模型才能比
+    sig = np.array([ai.sky_sigma(A[c], dist=1)[1] for c in range(C)], np.float32)[:, None, None]
     Tl = (T / sig).mean(0)
     sky = Tl < np.quantile(Tl, 0.5)
     bright = Tl > np.quantile(Tl, 0.85)
@@ -84,6 +93,8 @@ def main() -> int:
         bg = float(np.median(img[y - 12:y + 13, x - 12:x + 13]))
         return float((img[y - r:y + r + 1, x - r:x + r + 1] - bg).sum())
 
+    raw_L = np.mean([(A[c] - s) / sig[c] for c, (s, _g) in enumerate(units)], axis=0)
+    raw_flux = [flux(raw_L, y, x, r) for y, x, r in faint]     # 暗星的光度跟不降噪的比（不管有沒有跑 raw）
     results = {}
     for name in a.variants:
         t0 = time.time()
@@ -117,8 +128,6 @@ def main() -> int:
             ce = (res - res.mean(0)) / sig - (T - T.mean(0)) / sig
             line += f"  chroma {np.sqrt(np.mean(np.stack([ndimage.gaussian_filter(e, 2) for e in ce])[:, sky] ** 2)):.3f}"
         L = (res / sig).mean(0)
-        if name == "raw":
-            raw_flux = [flux(L, y, x, r) for y, x, r in faint]
         fr = [flux(L, y, x, r) / f0 for (y, x, r), f0 in zip(faint, raw_flux) if f0 > 0]
         fr = [v for v in fr if np.isfinite(v)]
         if fr:
@@ -136,7 +145,7 @@ def main() -> int:
     tiles = [disp(r) for r in list(results.values()) + [T]]
     strip = np.concatenate(tiles, axis=2)
     strip = np.repeat(np.repeat(strip, 2, 1), 2, 2)
-    imageio.save_display(out / "M81_sky.png", strip.astype(np.float32))
+    imageio.save_display(out / f"{a.set.split('_')[0]}_sky.png", strip.astype(np.float32))
     print("tiles:", " | ".join(list(results) + ["truth"]))
     return 0
 
