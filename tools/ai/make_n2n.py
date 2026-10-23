@@ -42,9 +42,10 @@ def set_name(folder: Path) -> str:
     return re.sub(r"[^\w.-]+", "_", f"{target}_{exp.group(1) if exp else ''}s")
 
 
-def make(folder: Path, out: Path, holdout: bool, seed: int = 7) -> None:
+def make(folder: Path, out: Path, holdout: bool, seed: int = 7, deep: bool = False) -> None:
+    """deep：深答案配對（A_4／A_8／A_16 用前 16 張，truth＝其餘全部，拿來訓練；至少 40 張）。"""
     files = sorted(folder.glob("*_r.xisf"))
-    if len(files) < 16:
+    if len(files) < (2 * max(LEVELS) + 8 if deep else 16):
         print(f"skip {folder} ({len(files)} subs)")
         return
     rng = np.random.default_rng(seed)
@@ -52,6 +53,9 @@ def make(folder: Path, out: Path, holdout: bool, seed: int = 7) -> None:
     half = len(files) // 2
     h1, h2 = order[:half], order[half:2 * half]
     levels = [k for k in LEVELS if k < half] + [half]
+    if deep:
+        levels = list(LEVELS)
+        h1, h2 = order[:max(LEVELS)], []
     name = set_name(folder)
     dst = out / name
     if (dst / "meta.json").is_file():
@@ -61,7 +65,7 @@ def make(folder: Path, out: Path, holdout: bool, seed: int = 7) -> None:
     sums: dict[str, np.ndarray] = {}
     valid = None
     t0 = time.time()
-    truth_from = h1[levels[0]:] + h2 + order[2 * half:] if holdout else []
+    truth_from = (order[max(LEVELS):] if deep else h1[levels[0]:] + h2 + order[2 * half:]) if holdout or deep else []
     for n, idx in enumerate(order):
         data = xisf.to_unit(xisf.read(files[idx]))
         p = data if data.ndim == 3 else data[None]
@@ -74,7 +78,7 @@ def make(folder: Path, out: Path, holdout: bool, seed: int = 7) -> None:
         if idx in h2:
             pos = h2.index(idx)
             targets += [f"B_{k}" for k in levels if pos < k]
-        if holdout and idx in truth_from:
+        if (holdout or deep) and idx in truth_from:
             targets.append("truth")
         for t in targets:
             if t not in sums:
@@ -84,14 +88,14 @@ def make(folder: Path, out: Path, holdout: bool, seed: int = 7) -> None:
     print()
     ys, xs = np.nonzero(valid)
     y0, y1, x0, x1 = ys.min() + 8, ys.max() - 8, xs.min() + 8, xs.max() - 8
-    counts = {f"A_{k}": k for k in levels} | {f"B_{k}": k for k in levels}
-    if holdout:
+    counts = {f"A_{k}": k for k in levels} | ({} if deep else {f"B_{k}": k for k in levels})
+    if holdout or deep:
         counts["truth"] = len(truth_from)
     for t, s in sums.items():
         arr = (s[:, y0:y1, x0:x1] / counts[t]).astype(np.float16)
         np.save(dst / f"{t}.npy", arr)
     meta = {"source": str(folder), "subs": len(files), "levels": levels, "shape": list(arr.shape),
-            "holdout": holdout, "crop": [int(y0), int(y1), int(x0), int(x1)], "counts": counts}
+            "holdout": holdout, "deep": deep, "crop": [int(y0), int(y1), int(x0), int(x1)], "counts": counts}
     (dst / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"saved {name} {arr.shape} levels={levels} in {time.time() - t0:.0f}s")
 
@@ -100,6 +104,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="output/ai/n2n")
     ap.add_argument("--holdout", default="M81")
+    ap.add_argument("--deep", action="store_true", help="做深答案配對（張數 40 以上的組；驗證組照舊）")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -108,7 +113,10 @@ def main() -> int:
         if not folder.is_dir():
             print(f"missing {folder}")
             continue
-        make(folder, out, holdout=a.holdout.lower() in str(folder).lower())
+        holdout = a.holdout.lower() in str(folder).lower()
+        if a.deep and holdout:
+            continue
+        make(folder, out, holdout=holdout, deep=a.deep)
     return 0
 
 

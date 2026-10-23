@@ -114,6 +114,10 @@ def synth_pair(m: np.ndarray, rng: np.random.Generator, g: float, S: float,
     return (clean + std * n1) / est, (clean + std * n2) / est, clean / est
 
 
+# 評估用的影像（star_check、artifact_audit、LBN576 對照、IC434 環的檢查）：master 小塊也不能拿來訓練
+EVAL_MASTERS = ("LBN576", "IC434", "M31", "M16", "NGC2244", "NGC6888", "M81")
+
+
 class Synth:
     """master 小塊＋即時加的模擬噪聲。"""
 
@@ -121,8 +125,8 @@ class Synth:
         self.mottle = mottle               # 存在物件上：Windows 的資料載入子行程不會帶到主程式改的全域變數
         self.crops = []
         meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
-        for m in meta:
-            if not m["holdout"]:
+        for m in meta:     # 評估用的影像不拿來訓練（第十四版起；以前 LBN576、IC434、M31、M16 有在裡面）
+            if not m["holdout"] and not any(t.lower() in m["path"].lower() for t in EVAL_MASTERS):
                 self.crops.append(np.load(root / f"{m['name']}.npy", mmap_mode="r"))
         self.sizes = np.array([len(c) for c in self.crops], np.float64)
         self.seed = seed
@@ -141,20 +145,75 @@ class Synth:
         return a, b
 
 
-class Pairs(torch.utils.data.IterableDataset):
-    def __init__(self, root: Path, train: bool, seed: int = 0):
-        self.items = []
-        for meta_path in sorted(root.glob("*/meta.json")):
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            if meta.get("holdout") == train:
+class BankSynth:
+    """master 小塊＋真實噪聲（tools/ai/make_noise_bank.py：實拍配對兩半相減的純噪聲），答案就是 master 本身（第十四版）。
+    跟 Synth 不同：噪聲是真的（去馬賽克、對齊插值的相關、斑駁、暗點、疊圖軟體的質感），答案沒有噪聲（不是另一份噪聲），
+    所以不能對調、星點也不用遮。master 自己的噪聲除以 g 後只剩新噪聲的 1/12～1/4。"""
+
+    def __init__(self, synth_root: Path, bank_root: Path):
+        self.crops, self.tiles = [], []
+        meta = json.loads((synth_root / "meta.json").read_text(encoding="utf-8"))
+        for m in meta:
+            if m["holdout"] or any(t.lower() in m["path"].lower() for t in EVAL_MASTERS):
                 continue
-            for k in meta["levels"]:
-                self.items.append((meta_path.parent, k, meta["shape"]))
+            self.crops.append(np.load(synth_root / f"{m['name']}.npy", mmap_mode="r"))
+        self.sizes = np.array([len(c) for c in self.crops], np.float64)
+        bank = json.loads((bank_root / "meta.json").read_text(encoding="utf-8"))
+        for b in bank:
+            self.tiles.append(np.load(bank_root / f"{b['name']}.npy", mmap_mode="r"))
+
+    def sample(self, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+        while True:
+            pair = self._sample(rng)
+            if pair is not None:
+                return pair
+
+    def _sample(self, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray] | None:
+        arr = self.crops[rng.choice(len(self.crops), p=self.sizes / self.sizes.sum())]
+        m = arr[int(rng.integers(len(arr)))]
+        y0, x0 = (int(rng.integers(0, m.shape[0] - CROP + 1)), int(rng.integers(0, m.shape[1] - CROP + 1)))
+        m = np.asarray(m[y0:y0 + CROP, x0:x0 + CROP], np.float32)
+        m = np.nan_to_num(np.clip(m, -F16_MAX, F16_MAX), nan=0.0)
+        tiles = self.tiles[int(rng.integers(len(self.tiles)))]          # 每組噪聲一樣常被抽到（不同相機、疊圖軟體）
+        t = tiles[int(rng.integers(len(tiles)))]
+        ty, tx = int(rng.integers(0, t.shape[0] - CROP + 1)), int(rng.integers(0, t.shape[1] - CROP + 1))
+        n = np.rot90(np.asarray(t[ty:ty + CROP, tx:tx + CROP], np.float32), int(rng.integers(4)))
+        if rng.random() < 0.5:
+            n = n[:, ::-1]
+        g = float(np.exp(rng.uniform(np.log(4.0), np.log(12.0))))
+        S = float(np.exp(rng.uniform(np.log(8.0), np.log(400.0))))
+        clean = m / g
+        noisy = clean + np.sqrt(1 + np.maximum(clean, 0) / S) * n
+        est = robust_sky_sigma(n)[1]                 # 推論時在天空量到的 σ（噪聲塊已經是相鄰差 σ＝1 的單位）
+        if not 0.5 < est < 2.0:                      # 保險：有一大片 0（沒資料）的塊量出來接近 0，換算後數值爆掉
+            return None
+        return noisy / est, clean / est
+
+
+class Pairs(torch.utils.data.IterableDataset):
+    """實拍配對。root 可以給好幾個：深答案配對（meta 的 deep：A_k 對其餘全部的平均 truth）跟兩半配對（A_k 對 B_k）；
+    同一組有深答案的就不用它的兩半配對（後面的 root 優先）。"""
+
+    def __init__(self, root: Path | list[Path], train: bool, seed: int = 0):
+        self.items = []
+        roots = root if isinstance(root, list) else [root]
+        seen = set()
+        for r in reversed(roots):
+            for meta_path in sorted(r.glob("*/meta.json")):
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if meta.get("holdout") == train or meta_path.parent.name in seen:
+                    continue
+                seen.add(meta_path.parent.name)
+                for k in meta["levels"]:
+                    self.items.append((meta_path.parent, k, meta["shape"], bool(meta.get("deep"))))
         self.seed = seed
         self.stats: dict = {}
         self.bright: dict = {}
         self.synth: Synth | None = None
-        self.scale_range = SCALE_RANGE     # 存在物件上：Windows 的資料載入子行程不會帶到主程式改的全域變數
+        self.bank: BankSynth | None = None
+        self.synth_share = SYNTH_SHARE     # 存在物件上：Windows 的資料載入子行程不會帶到主程式改的全域變數
+        self.bank_share = 0.0
+        self.scale_range = SCALE_RANGE
 
     def _arr(self, folder: Path, name: str) -> np.ndarray:
         return np.load(folder / f"{name}.npy", mmap_mode="r")
@@ -177,15 +236,20 @@ class Pairs(torch.utils.data.IterableDataset):
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
         rng = np.random.default_rng(self.seed + (info.id if info else 0) * 9973 + int(time.time()))
-        weights = np.array([s[1] * s[2] for _f, _k, s in self.items], np.float64)
+        weights = np.array([s[1] * s[2] for _f, _k, s, _d in self.items], np.float64)
         weights /= weights.sum()
         while True:
-            if self.synth is not None and rng.random() < SYNTH_SHARE:
+            r = rng.random()
+            if self.bank is not None and r < self.bank_share:
+                a, b = self.bank.sample(rng)
+                yield (*self._finish(a, b, rng, swap=False), torch.tensor(1.0))
+                continue
+            if self.synth is not None and r < self.bank_share + self.synth_share:
                 a, b = self.synth.sample(rng)
                 yield (*self._finish(a, b, rng), torch.tensor(1.0))
                 continue
-            folder, k, shape = self.items[rng.choice(len(self.items), p=weights)]
-            A, B = self._arr(folder, f"A_{k}"), self._arr(folder, f"B_{k}")
+            folder, k, shape, deep = self.items[rng.choice(len(self.items), p=weights)]
+            A, B = self._arr(folder, f"A_{k}"), self._arr(folder, "truth" if deep else f"B_{k}")
             c = int(rng.integers(shape[0]))
             sky, sig = self._stats(folder, k, c, A)
             y0 = int(rng.integers(0, shape[1] - CROP))
@@ -198,19 +262,19 @@ class Pairs(torch.utils.data.IterableDataset):
                     x0 = int(np.clip(cx - CROP // 2 + rng.integers(-48, 49), 0, shape[2] - CROP))
             a = (np.asarray(A[c, y0:y0 + CROP, x0:x0 + CROP], np.float32) - sky) / sig
             b = (np.asarray(B[c, y0:y0 + CROP, x0:x0 + CROP], np.float32) - sky) / sig
-            if rng.random() < WHITE_SHARE:
+            if not deep and rng.random() < WHITE_SHARE:      # 深答案的 truth 不加（答案要乾淨）
                 u = float(rng.uniform(0.3, 1.5))
                 k = 1.0 / math.sqrt(1 + u * u)
                 a = (a + u * rng.standard_normal(a.shape).astype(np.float32)) * k
                 b = (b + u * rng.standard_normal(b.shape).astype(np.float32)) * k
-            yield (*self._finish(a, b, rng), torch.tensor(0.0))
+            yield (*self._finish(a, b, rng, swap=not deep), torch.tensor(0.0))
 
-    def _finish(self, a: np.ndarray, b: np.ndarray, rng: np.random.Generator):
-        """噪聲尺度隨機縮放、對調、旋轉、翻轉。"""
+    def _finish(self, a: np.ndarray, b: np.ndarray, rng: np.random.Generator, swap: bool = True):
+        """噪聲尺度隨機縮放、對調（答案比輸入乾淨的配對不能對調）、旋轉、翻轉。"""
         lo, hi = self.scale_range
         u = float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
         a, b = a * u, b * u
-        if rng.random() < 0.5:
+        if swap and rng.random() < 0.5:
             a, b = b, a
         r = int(rng.integers(4))
         a, b = np.rot90(a, r), np.rot90(b, r)
@@ -340,10 +404,11 @@ def tiled(model: nn.Module, x: np.ndarray, device, tile: int = 512, pad: int = 3
     return out
 
 
-def validate(model: nn.Module, root: Path, device) -> dict:
+def validate(model: nn.Module, root: Path | list[Path], device) -> dict:
     model.eval()
     res = {}
-    for meta_path in root.glob("*/meta.json"):
+    roots = root if isinstance(root, list) else [root]
+    for meta_path in [mp for r in roots for mp in r.glob("*/meta.json")]:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if not meta.get("holdout"):
             continue
@@ -407,7 +472,11 @@ def validate_synth(model: nn.Module, root: Path, device) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="output/ai/n2n")
+    ap.add_argument("--data", nargs="+", default=["output/ai/n2n"],
+                    help="實拍配對的資料夾（可以好幾個；深答案配對放後面，同一組優先用它）")
+    ap.add_argument("--bank", default=None, help="真實噪聲庫（make_noise_bank.py）；給了就用「master＋真實噪聲」配對")
+    ap.add_argument("--bank-share", type=float, default=0.45, help="噪聲庫配對佔的比例")
+    ap.add_argument("--synth-share", type=float, default=SYNTH_SHARE, help="模擬噪聲配對佔的比例（有噪聲庫時建議 0.15）")
     ap.add_argument("--out", default="output/ai/model")
     ap.add_argument("--steps", type=int, default=6000)
     ap.add_argument("--batch", type=int, default=16)
@@ -424,12 +493,13 @@ def main() -> int:
     ap.add_argument("--loss", choices=("l2", "l1", "l1l2"), default="l2",
                     help="l1：學中位數（孤立單點整個拿掉，第十一版）；l1l2：L1＋0.25×平方誤差（大誤差不准，避免星點外的環）")
     a = ap.parse_args()
-    root, out = Path(a.data), Path(a.out)
+    root, out = [Path(d) for d in a.data], Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda")
     model = UNet(tuple(a.width), hp_sigma=a.hp).to(device)
     (out / "config.json").write_text(json.dumps({"width": a.width, "scale": a.scale, "hp": a.hp, "mottle": a.mottle, "loss": a.loss,
-                                                "noise_dist": a.noise_dist}),
+                                                "noise_dist": a.noise_dist, "data": a.data, "bank": a.bank,
+                                                "bank_share": a.bank_share, "synth_share": a.synth_share}),
                                      encoding="utf-8")
     print("params", sum(p.numel() for p in model.parameters()))
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=1e-4)
@@ -438,6 +508,12 @@ def main() -> int:
     os.environ["N2N_NOISE_DIST"] = str(a.noise_dist)
     pairs = Pairs(root, train=True)
     pairs.scale_range = tuple(a.scale)
+    pairs.synth_share = a.synth_share
+    if a.bank:
+        pairs.bank = BankSynth(Path(a.synth), Path(a.bank))
+        pairs.bank_share = a.bank_share
+        print("bank: masters", len(pairs.bank.crops), "noise sets", len(pairs.bank.tiles), flush=True)
+    print("real pair items", len(pairs.items), "deep", sum(d for *_x, d in pairs.items), flush=True)
     synth_root = Path(a.synth) if a.synth else None
     if synth_root is not None and (synth_root / "meta.json").is_file():
         pairs.synth = Synth(synth_root, mottle=a.mottle)

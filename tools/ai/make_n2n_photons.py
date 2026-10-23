@@ -90,15 +90,18 @@ def pick(lights: list[Path]) -> list[Path]:
     return keep
 
 
-def make_pairs(frames, bayer, shape, be, dst: Path, meta: dict, seed: int = 7, holdout: bool = False) -> None:
-    """holdout：驗證組。A_4／A_8／A_16 用前 16 張，truth＝其餘全部的平均（跟 A 不重疊，幾乎沒噪聲）；不存 B。"""
+def make_pairs(frames, bayer, shape, be, dst: Path, meta: dict, seed: int = 7, holdout: bool = False,
+               deep: bool = False) -> None:
+    """holdout：驗證組。A_4／A_8／A_16 用前 16 張，truth＝其餘全部的平均（跟 A 不重疊，幾乎沒噪聲）；不存 B。
+    deep：切法跟驗證組一樣，但拿來訓練（答案是其餘全部的平均，噪聲只剩兩半互當答案時的 20～40%）。"""
+    holdout_like = holdout or deep
     jobs = engine._jobs(frames)
     n = len(jobs)
-    if n < MIN_SUBS or (holdout and n < 2 * max(LEVELS)):
+    if n < MIN_SUBS or (holdout_like and n < 2 * max(LEVELS) + 8):
         raise SystemExit(f"只有 {n} 張通過對齊，不夠用")
     rng = np.random.default_rng(seed)
     order = [int(i) for i in rng.permutation(n)]
-    if holdout:
+    if holdout_like:
         levels = list(LEVELS)
         h1, h2 = order[:max(LEVELS)], order[max(LEVELS):]
     else:
@@ -127,7 +130,7 @@ def make_pairs(frames, bayer, shape, be, dst: Path, meta: dict, seed: int = 7, h
         img = np.nan_to_num(img) * unit
         if idx in h1:
             targets = [f"A_{k}" for k in levels if h1.index(idx) < k]
-        elif holdout:
+        elif holdout_like:
             targets = ["truth"]
         else:
             targets = [f"B_{k}" for k in levels if h2.index(idx) < k]
@@ -139,13 +142,13 @@ def make_pairs(frames, bayer, shape, be, dst: Path, meta: dict, seed: int = 7, h
     print()
     ys, xs = np.nonzero(valid)
     y0, y1, x0, x1 = ys.min() + 8, ys.max() - 8, xs.min() + 8, xs.max() - 8
-    counts = {f"A_{k}": k for k in levels} | ({"truth": len(h2)} if holdout else {f"B_{k}": k for k in levels})
+    counts = {f"A_{k}": k for k in levels} | ({"truth": len(h2)} if holdout_like else {f"B_{k}": k for k in levels})
     dst.mkdir(parents=True, exist_ok=True)
     arr = None
     for t, s in sums.items():
         arr = (s[:, y0:y1, x0:x1] / counts[t]).astype(np.float16)
         np.save(dst / f"{t}.npy", arr)
-    meta.update({"subs": n, "levels": levels, "shape": list(arr.shape), "holdout": holdout,
+    meta.update({"subs": n, "levels": levels, "shape": list(arr.shape), "holdout": holdout, "deep": deep,
                  "crop": [int(y0), int(y1), int(x0), int(x1)], "counts": counts, "stacker": "photons",
                  "frames": [str(frames[i].path) for i in h1 + h2]})
     (dst / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -164,6 +167,7 @@ def main() -> int:
     ap.add_argument("--no-flat", action="store_true", help="不用 flat（calib_check 看出配錯、變更不平時）")
     ap.add_argument("--no-pick", action="store_true", help="不先用 APU Pick 挑片")
     ap.add_argument("--holdout", action="store_true", help="做成驗證組（A 跟其餘全部的平均 truth，不參加訓練）")
+    ap.add_argument("--deep", action="store_true", help="深答案配對（切法同驗證組，拿來訓練；至少 40 張）")
     ap.add_argument("--keep-cache", action="store_true", help="做完不刪 Photons 校正後的暫存")
     ap.add_argument("--one-train", action="store_true", help="只用張數最多的光學系統（焦距不同的不合併）")
     ap.add_argument("--flat-any-night", action="store_true",
@@ -190,7 +194,7 @@ def main() -> int:
             "no_flat": a.no_flat, "flat_any_night": a.flat_any_night}
 
     def integrate_hook(frames, bayer, shape, s, gdir, be, workers, log, progress=None):
-        make_pairs(frames, bayer, shape, be, dst, meta, holdout=a.holdout)
+        make_pairs(frames, bayer, shape, be, dst, meta, holdout=a.holdout, deep=a.deep)
         raise PairsDone()
 
     engine._integrate = integrate_hook
