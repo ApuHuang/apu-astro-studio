@@ -9,3 +9,7 @@ output/
 build.log
 .venv-ai/
 dist-*/
+# 只留在本機（協作筆記、交接文件、有本機路徑的訓練資料清單）
+CLAUDE.md
+docs/handoff-*.md
+tools/ai/n2n_photons_sets.json
