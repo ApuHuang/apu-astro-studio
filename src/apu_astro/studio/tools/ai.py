@@ -64,6 +64,66 @@ def session_rgb():
     return _session_rgb
 
 
+# ---------------------------------------------------------------------- 去星的「仿製填滿」
+
+MODEL_INPAINT = Path(__file__).resolve().parents[2] / "assets" / "inpaint.onnx"
+_session_inpaint = None
+
+
+def available_inpaint() -> bool:
+    return MODEL_INPAINT.is_file()
+
+
+def session_inpaint():
+    global _session_inpaint
+    with _session_lock:
+        if _session_inpaint is None:
+            _session_inpaint = _open(MODEL_INPAINT)
+    return _session_inpaint
+
+
+def inpaint_planes(planes: np.ndarray, mask: np.ndarray, base: np.ndarray, ctx: Ctx | None = None,
+                   noise_ratio: float = 1.0, tile: int = 512, pad: int = 128,
+                   only: np.ndarray | None = None) -> np.ndarray:
+    """星點的洞用 AI 補（tools/ai/train_inpaint.py：在沒有星的地方挖洞、原圖當答案訓練的）。
+    planes：(C, H, W) 線性；mask：洞；base：調和內插補好的（backend.harmonic_fill，模型在它上面加修正）。
+    只補亮度（各色版平均），顏色照 base 的平滑內插：各色版各自補的話洞裡容易出色斑。每個色版加一樣的亮度修正
+    （＝亮度用 AI 的、色差「色版−亮度」用平滑內插的；按各色佔亮度的比例分的話，去光梯度後天空接近 0，比例不穩）。
+    noise_ratio：前面的降噪讓單一像素的噪聲降了幾倍（訓練用的是沒降噪的 master，噪聲單位要換回去）。
+    only：只改這些洞（其他的洞模型也知道是洞，但結果照 base）。
+    分塊算（tile＋四周 pad 當周圍的參考），沒有要改的洞的塊跳過。"""
+    only = mask if only is None else only & mask
+    if not only.any():
+        return base
+    L = planes.mean(axis=0)
+    Lh = base.mean(axis=0)
+    sky, sig = sky_sigma(L, dist=1)
+    sig *= max(float(noise_ratio), 1.0)
+    x = ((np.where(mask, Lh, L) - sky) / sig).astype(np.float32)
+    m = mask.astype(np.float32)
+    h, w = x.shape
+    y = x.copy()
+    sess = session_inpaint()
+    jobs = [(yy, xx) for yy in range(0, h, tile) for xx in range(0, w, tile) if only[yy:yy + tile, xx:xx + tile].any()]
+    for done, (yy, xx) in enumerate(jobs):
+        if ctx is not None:
+            ctx.check()
+        y0, x0 = max(0, yy - pad), max(0, xx - pad)
+        y1, x1 = min(h, yy + tile + pad), min(w, xx + tile + pad)
+        bx, bm = x[y0:y1, x0:x1], m[y0:y1, x0:x1]
+        ph, pw = (-bx.shape[0]) % 32, (-bx.shape[1]) % 32          # 網路縮小 5 次：邊長要是 32 的倍數
+        if ph or pw:
+            bx = np.pad(bx, ((0, ph), (0, pw)), mode="reflect")
+            bm = np.pad(bm, ((0, ph), (0, pw)), mode="constant")
+        res = sess.run(None, {"x": bx[None, None], "mask": bm[None, None]})[0][0, 0]
+        th, tw = min(tile, h - yy), min(tile, w - xx)
+        y[yy:yy + th, xx:xx + tw] = res[yy - y0:yy - y0 + th, xx - x0:xx - x0 + tw]
+        if ctx is not None:
+            ctx.progress(0.4 + 0.3 * (done + 1) / len(jobs), "inpaint")
+    delta = np.where(only, y * sig + sky - Lh, 0.0).astype(np.float32)
+    return (base + delta[None]).astype(np.float32)
+
+
 _noise_dist_cache: dict[str, int] = {}
 
 
@@ -401,6 +461,10 @@ class AIDenoise(Tool):
             rs = detail_noise(before) / max(detail_noise(after), 1e-12)
             old = out.notes[name].get("detail_noise_ratio")
             out.notes[name]["detail_noise_ratio"] = float(rs * (old or 1.0))
+            # 單一像素的噪聲（相鄰像素差）降了幾倍：AI 補星點的洞要換回沒降噪的單位（訓練用的是原始 master）
+            rp = sky_sigma(before.mean(axis=0), dist=1)[1] / max(sky_sigma(after.mean(axis=0), dist=1)[1], 1e-12)
+            old = out.notes[name].get("pixel_noise_ratio")
+            out.notes[name]["pixel_noise_ratio"] = float(rp * (old or 1.0))
             ctx.view["noise_ratio"] = round(float(rl), 2)
         return out
 

@@ -456,6 +456,53 @@ def test_star_split_at_quick_resolution_keeps_most_of_the_sky(scale):
     assert float(np.percentile(sl, 99.9)) < float(np.percentile(img.mean(axis=0), 99.9)) * 0.5
 
 
+def test_detect_stars_splits_close_pairs():
+    # 門檻低了以後靠很近的兩顆星連成一條，find_stars 當成星雲纖維整塊丟掉（LBN576 一顆 300σ 的星留在無星圖上）；
+    # mask 也要一塊一顆，recenter_stars 才會真的重新定位、拆開
+    from scipy import ndimage
+
+    from apu_astro.studio.tools import stars as tstars
+    h, w = 200, 200
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    L = np.full((h, w), 0.02, np.float32)
+    for cy, cx in ((60, 60), (60, 65.5), (60, 71), (140, 140)):     # 三顆一串＋一顆單獨的
+        L += 0.2 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 1.3 ** 2))
+    L += np.random.default_rng(0).normal(0, 0.0005, L.shape).astype(np.float32)
+    st = tstars.detect_stars(L, 5.0)
+    assert ndimage.label(st.mask)[1] == len(st.y)
+    st = tstars.recenter_stars(L, st, 1.0)
+    for cy, cx in ((60, 60), (60, 65.5), (60, 71), (140, 140)):
+        assert float(np.min(np.hypot(st.y - cy, st.x - cx))) < 1.0
+
+
+@pytest.mark.parametrize("nebula", [0.0, 0.001])
+def test_star_split_removes_wings(nebula):
+    # 星點模型：星核挖掉補、外圍扣模型。星的位置（8 px 內）要跟真正的背景差不到 1σ，而且洞不能大。
+    # 以前整顆挖掉：範圍小（亮星只到 6 px），邊上還有星光、洞整個偏亮（平坦背景中位數 +0.28σ、6% 超過 1σ）；
+    # 範圍大的話密集星場一半被補平
+    rng = np.random.default_rng(5)
+    h, w = 400, 400
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    noise = 0.0005
+    bg = 0.02 + nebula * np.sin(xx / 20.0) * np.cos(yy / 27.0)        # 星雲的紋路
+    img = bg + rng.normal(0, noise, (h, w)).astype(np.float32)
+    truth = img.copy()
+    pos = []
+    for _ in range(160):
+        cy, cx = rng.uniform(20, h - 20), rng.uniform(20, w - 20)
+        f = noise * 10 ** rng.uniform(np.log10(8), np.log10(1500))
+        img += f * (1 + ((yy - cy) ** 2 + (xx - cx) ** 2) / 2.2 ** 2) ** -2.5      # Moffat：外圍比高斯寬
+        pos.append((cy, cx, f))
+    out, ctx = _star_split(np.stack([img] * 3).astype(np.float32), 1.0)
+    sl = out.layers["starless"].mean(axis=0)
+    assert np.asarray(ctx.view["holes"]).mean() < 0.2
+    res = np.array([float((sl - truth)[np.hypot(yy - cy, xx - cx) < 8].mean()) / noise
+                    for cy, cx, f in pos if f >= 20 * noise])        # 暗星在找星門檻邊緣，不算
+    assert np.mean(np.abs(res) > 1) <= (0.03 if nebula == 0 else 0.1)
+    if nebula == 0:
+        assert abs(float(np.median(res))) < 0.2
+
+
 def test_harmonic_fill_has_no_dark_centre():
     # 大洞中間不能比邊界暗（以前的補法中間用遠處平均，亮星的星暈補完一圈暗盤＋亮環）
     from apu_astro.studio import backend

@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import warnings
+from dataclasses import dataclass
+
 import numpy as np
 from apu_processing import detail as pdetail
 from scipy import ndimage
@@ -16,6 +19,10 @@ from . import T, Ctx, State, Tool, choice, register, slider, toggle
 
 
 SMOOTH = 7      # 沿方向平均的長度（px）：繞射芒、星暈外圍每個像素都比噪聲暗，要平均才量得到
+# 繞射芒：沿線的亮度降到 SPIKE_LIMIT 倍（沿線取樣的）噪聲為止，遮到量到長度的 SPIKE_EXTRA 倍。以前 3 倍、1.3 倍：
+# 尾巴每個像素不到 1σ，但一條長線強拉伸後還是看得到（LBN576 亮星的繞射芒留下 150 px 的淡線）
+SPIKE_LIMIT = 2.0
+SPIKE_EXTRA = 1.8
 
 
 def _ray(hp: np.ndarray, cy: float, cx: float, angle: float, t: np.ndarray, half: float) -> np.ndarray:
@@ -30,6 +37,14 @@ def _ray(hp: np.ndarray, cy: float, cx: float, angle: float, t: np.ndarray, half
     return ndimage.uniform_filter1d(acc / 3, SMOOTH, mode="nearest")
 
 
+def _label_max(values: np.ndarray, lab: np.ndarray, n: int, where: np.ndarray | None = None) -> np.ndarray:
+    """每個連通區（1..n）的最大值，(n+1,)，第 0 個是背景。ndimage.maximum 對幾萬個區塊很慢（逐塊挑）。"""
+    sel = lab > 0 if where is None else (lab > 0) & where
+    out = np.full(n + 1, -np.inf, np.float64)
+    np.maximum.at(out, lab[sel], values[sel])
+    return out
+
+
 def _background(L: np.ndarray, f: int = 8) -> np.ndarray:
     """不受星點影響的背景：f×f 區塊取中位數 → 再取 7×7 中位數 → 放大回原尺寸。
     （用高斯模糊當背景的話，亮星附近的背景會被星點拉高，星暈、繞射芒反而變成負的）"""
@@ -38,11 +53,16 @@ def _background(L: np.ndarray, f: int = 8) -> np.ndarray:
     if h < f or w < f:
         return np.full_like(L, float(np.median(L)))
     blocks = L[:h2, :w2].reshape(h2 // f, f, w2 // f, f).transpose(0, 2, 1, 3).reshape(h2 // f, w2 // f, -1)
-    small = ndimage.median_filter(np.median(blocks, axis=2), size=7, mode="nearest")
-    zy = np.clip((np.arange(h) + 0.5) / f - 0.5, 0, small.shape[0] - 1)
-    zx = np.clip((np.arange(w) + 0.5) / f - 0.5, 0, small.shape[1] - 1)
-    yy, xx = np.meshgrid(zy, zx, indexing="ij")
-    return ndimage.map_coordinates(small, [yy, xx], order=1).astype(np.float32)
+    small = ndimage.median_filter(np.median(blocks, axis=2), size=7, mode="nearest").astype(np.float32)
+    # 放大回原尺寸：雙線性，分兩個方向做（整張的座標網格 map_coordinates 一次要 2 個 160 MB 的陣列）
+    def axis_weights(n, m):
+        z = np.clip((np.arange(n) + 0.5) / f - 0.5, 0, m - 1)
+        i0 = np.minimum(np.floor(z).astype(int), m - 1)
+        return i0, np.minimum(i0 + 1, m - 1), (z - i0).astype(np.float32)
+    y0, y1, fy = axis_weights(h, small.shape[0])
+    x0, x1, fx = axis_weights(w, small.shape[1])
+    rows = small[y0] * (1 - fy)[:, None] + small[y1] * fy[:, None]
+    return (rows[:, x0] * (1 - fx)[None] + rows[:, x1] * fx[None]).astype(np.float32)
 
 
 def _extent(profile: np.ndarray, t: np.ndarray, limit: float) -> float:
@@ -230,7 +250,7 @@ def halo_spike_mask(L: np.ndarray, stars, scale: float, noise_boost: float = 1.0
 
     ray_noise = mad_of(medians)
     halo_limit = 3.0 * ray_noise * noise_boost
-    spike_limit = 3.0 * mad_of(singles) * noise_boost
+    spike_limit = SPIKE_LIMIT * mad_of(singles) * noise_boost
 
     mask = np.zeros((h, w), bool)
     model = planes is not None and core_r is not None
@@ -294,7 +314,7 @@ def halo_spike_mask(L: np.ndarray, stars, scale: float, noise_boost: float = 1.0
             length = _extent(_ray(hp, cy, cx, a, t, width) - np.maximum(ref, 0), t, spike_limit)
             if length <= halo:
                 continue
-            tt = np.arange(0, length * 1.3 + SMOOTH, 0.5)
+            tt = np.arange(0, length * SPIKE_EXTRA + SMOOTH, 0.5)
             for off in np.arange(-width - 1.5, width + 1.51, 0.5):
                 ys = np.round(cy + tt * np.sin(a) + off * np.cos(a)).astype(int)
                 xs = np.round(cx + tt * np.cos(a) - off * np.sin(a)).astype(int)
@@ -303,19 +323,80 @@ def halo_spike_mask(L: np.ndarray, stars, scale: float, noise_boost: float = 1.0
     return (mask if mask.any() else None), angle, halos
 
 
+def detect_stars(L: np.ndarray, threshold: float):
+    """找星：8 px 以下的細結構（starlet 前三層）比「細結構真正的噪聲」亮 threshold 倍的連通區，每一塊一顆
+    （重心用細結構加權），跟 pdetail.find_stars 一樣，差在三個地方：
+    1. 噪聲：find_stars 用細結構整體的 MAD，降噪後背景的噪聲很小、細結構裡星點反而佔大部分，量到的「噪聲」被星點
+       撐大好幾倍（LBN576 AI 降噪後：設 9.4σ，峰值 10～20σ 的星只找到 2%，無星圖上暗星幾乎全留著）。這裡反覆剔掉
+       3σ 以外的值（星點），剩下的才是噪聲；AI 留下的紋理也算在噪聲裡，不會被當成星
+    2. 細長的塊不丟：門檻低了以後靠很近的星連成一條（雙星、星串），find_stars 當成星雲纖維整塊丟掉
+       （LBN576 一顆 300σ 的星就這樣留在無星圖上）。之後 recenter_stars 拆成一顆顆，星雲纖維由 star_like 擋
+    3. mask 是星核的連通區（沒有外擴）：recenter_stars 靠它對應每顆星。find_stars 的 mask 外擴過，相鄰的星連在一起、
+       塊數對不上，重新定位整個被跳過（LBN576 2241 顆星只有 1022 塊）"""
+    from apu_processing import denoise as pdenoise
+    _coeffs, smooth = pdenoise.starlet(L, 3)
+    top = L - smooth
+    h, w = L.shape
+    v = top[:: max(1, h // 512), :: max(1, w // 512)].ravel().astype(np.float64)
+    sig = 1.4826 * float(np.median(np.abs(v - np.median(v))))
+    for _ in range(8):
+        m = float(np.median(v))
+        sig = 1.4826 * float(np.median(np.abs(v - m)))
+        keep = np.abs(v - m) < 3.0 * sig
+        if keep.all():
+            break
+        v = v[keep]
+    cand = top > threshold * max(sig, 1e-12)
+    lab, n = ndimage.label(cand)
+    if n == 0:
+        z = np.zeros(0)
+        return pdetail.Stars(z, z, z, np.zeros(0, bool), np.zeros((h, w), bool), np.zeros((h, w), np.float32), sig)
+    py, px = np.nonzero(cand)
+    li = lab[py, px]
+    area = np.bincount(li, minlength=n + 1)[1:]
+    ok = area >= 3
+    wts = np.maximum(top[py, px], 0).astype(np.float64)
+    tot = np.maximum(np.bincount(li, wts, minlength=n + 1)[1:], 1e-30)
+    ys = np.bincount(li, wts * py, minlength=n + 1)[1:] / tot
+    xs = np.bincount(li, wts * px, minlength=n + 1)[1:] / tot
+    # 飽和：塊裡的最大值接近整張的最大值，而且至少 5 個像素一樣高
+    vals = L[py, px]
+    peak = np.full(n + 1, -np.inf)
+    np.maximum.at(peak, li, vals)
+    flat = np.bincount(li, vals >= 0.995 * peak[li], minlength=n + 1)[1:]
+    peak = peak[1:]
+    sat = (peak >= 0.97 * float(L.max())) & (flat >= 5)
+    keep_lab = np.concatenate([[False], ok])
+    mask = keep_lab[lab]
+    return pdetail.Stars(ys[ok], xs[ok], np.sqrt(area[ok] / np.pi), sat[ok], mask, mask.astype(np.float32), sig)
+
+
+def _discs(shape: tuple[int, int], ys: np.ndarray, xs: np.ndarray, radii: np.ndarray) -> np.ndarray:
+    """每個 (y, x) 畫一個半徑 r 的圓（小數位置、小數半徑）。"""
+    h, w = shape
+    mask = np.zeros((h, w), bool)
+    for y, x, r in zip(ys, xs, radii):
+        ri = int(np.ceil(r)) + 1
+        yi, xi = int(round(y)), int(round(x))
+        y0, y1, x0, x1 = max(0, yi - ri), min(h, yi + ri + 1), max(0, xi - ri), min(w, xi + ri + 1)
+        if y1 <= y0 or x1 <= x0:
+            continue
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        mask[y0:y1, x0:x1] |= (yy - y) ** 2 + (xx - x) ** 2 <= r * r
+    return mask
+
+
 def star_footprints(L: np.ndarray, stars, scale: float, grow: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
-    """每顆星自己的範圍：從星心往 8 個方向取亮度剖面（取第二暗的方向），扣掉外圈的局部背景，
-    降到峰值 10% 的半徑 × 1.6＋1 px（但不超過半高半徑 × 2.5＋1.5、也不超過降到噪聲以下的半徑＋1.5）
-    再加 grow 畫成圓（px 都是完整尺寸）。暗星的 10% 在噪聲裡量不準、常常量得很大：以前暗星一顆半徑 7 px 以上，
-    門檻放低一點遮罩就蓋掉半張圖（NGC6888），只好把門檻設高，結果暗星留在無星圖上、拉伸後很明顯。
-    回傳 (遮罩, 每顆星的半徑，不含 grow)。
+    """每顆星的星核範圍（AI 降噪的去斑用：只填星核，見 ai._coarse_pass）：從星心往 8 個方向取亮度剖面（取第二暗的
+    方向），扣掉外圈的局部背景，降到峰值 10% 的半徑 × 1.6＋1 px（但不超過半高半徑 × 2.5＋1.5、也不超過降到噪聲
+    以下的半徑＋1.5）再加 grow 畫成圓（px 都是完整尺寸）。回傳 (遮罩, 每顆星的半徑，不含 grow)。
+    去星不用這個（亮星外圍還有好幾 σ，見 star_model）。
     不用找星的連通區域：亮星常跟旁邊的星雲連成一塊，整塊被當成星（NGC6888 星雲亮邊被搬進星點層）。
     半徑、圓心都用小數：快速預覽的一個像素是完整尺寸的 4 px，取整數的話每顆星大一圈，預覽補掉的比成品多。"""
     h, w = L.shape
     n = len(stars.y)
-    mask = np.zeros((h, w), bool)
     if n == 0:
-        return mask, np.zeros(0)
+        return np.zeros((h, w), bool), np.zeros(0)
     rmax = max(6, int(round(24 / max(scale, 1e-6))))
     step = 1.0 / max(1, int(round(scale)))                 # 取樣間隔＝完整尺寸 1 px
     rr = np.arange(0, rmax + 1e-6, step, dtype=np.float32)
@@ -345,15 +426,284 @@ def star_footprints(L: np.ndarray, stars, scale: float, grow: float = 0.0) -> tu
     # 半高半徑也限制一下：嵌在星雲裡的星外圈背景不平，降不到 10%，只看 r10 會一路量到上限
     px = 1.0 / max(scale, 1e-6)                            # 完整尺寸 1 px 在這個解析度是幾個像素
     R = np.clip(np.minimum(np.minimum(1.6 * radii + px, 2.5 * half + 1.5 * px), lost + 1.5 * px), 2.0 * px, 20.0 * px)
-    for y, x, r in zip(stars.y, stars.x, R + grow * px):
-        ri = int(np.ceil(r)) + 1
-        yi, xi = int(round(y)), int(round(x))
-        y0, y1, x0, x1 = max(0, yi - ri), min(h, yi + ri + 1), max(0, xi - ri), min(w, xi + ri + 1)
-        if y1 <= y0 or x1 <= x0:
-            continue
-        yy, xx = np.ogrid[y0:y1, x0:x1]
-        mask[y0:y1, x0:x1] |= (yy - y) ** 2 + (xx - x) ** 2 <= r * r
-    return mask, R
+    return _discs((h, w), stars.y, stars.x, R + grow * px), R
+
+
+FOOT_LEVEL = 0.3      # 星光降到幾倍像素噪聲（完整解析度）算到底
+HOLE_LEVEL = 3.0      # 星點模型還有幾倍像素噪聲以上的地方挖掉補（模型不夠準），以下扣模型
+FOOT_RMAX = 40.0      # 剖面量到幾 px（完整尺寸）；更外面的星暈用扣的（halo_spike_mask）
+OWN_RMAX = 120.0      # 飽和、特別亮的星自己的剖面量到幾 px（完整尺寸）
+OWN_PEAK = 1000.0     # 快速預覽上峰值幾倍噪聲以上的星量自己的剖面（不用疊的形狀；見 star_model）
+FOOT_REF_MIN = 12     # 量標準星點形狀至少要幾顆星
+
+
+def _ring_samples(L: np.ndarray, ys: np.ndarray, xs: np.ndarray, rr: np.ndarray) -> np.ndarray:
+    """每顆星在半徑 rr 上 16 個方向的值（每個半徑由暗到亮排好），(n, 16, len(rr))。"""
+    h, w = L.shape
+    th = np.radians(np.arange(0, 360, 22.5, dtype=np.float32))
+    out = np.empty((len(ys), 16, len(rr)), np.float32)
+    for a in range(0, len(ys), 2000):                # 一次 2000 顆，省記憶體
+        y = ys[a:a + 2000, None, None].astype(np.float32)
+        x = xs[a:a + 2000, None, None].astype(np.float32)
+        py = np.clip(y + rr[None, None, :] * np.sin(th)[None, :, None], 0, h - 1)
+        px = np.clip(x + rr[None, None, :] * np.cos(th)[None, :, None], 0, w - 1)
+        out[a:a + 2000] = np.sort(ndimage.map_coordinates(L, [py.ravel(), px.ravel()], order=1).reshape(py.shape),
+                                  axis=1)
+    return out
+
+
+def _radii_grid(scale: float, rmax: float) -> np.ndarray:
+    """剖面的半徑：每完整尺寸 1 px 一點。"""
+    step = 1.0 / max(1, int(round(scale)))
+    return np.arange(0, rmax + 1e-6, step, dtype=np.float32)
+
+
+def _centre_bg(L: np.ndarray, ys: np.ndarray, xs: np.ndarray, rr: np.ndarray):
+    """每顆星的星心值、外圈（rr 的 80% 以外）的中位數與第 1/4 暗的值。"""
+    far = rr[rr >= 0.8 * rr[-1]]
+    smp = _ring_samples(L, ys, xs, np.concatenate([[0.0], far]).astype(np.float32))
+    ring = smp[:, :, 1:].reshape(len(ys), -1)
+    return smp[:, 0, 0], np.median(ring, axis=1), np.percentile(ring, 25, axis=1)
+
+
+def _profiles(L: np.ndarray, ys: np.ndarray, xs: np.ndarray, rr: np.ndarray):
+    """每顆星 16 個方向的亮度剖面：(各方向的中位數 (n, r), 第 4 暗的方向 (n, r))。"""
+    smp = _ring_samples(L, ys, xs, rr)
+    return 0.5 * (smp[:, 7] + smp[:, 8]), smp[:, 3]
+
+
+def _crossing(s: np.ndarray, rr: np.ndarray, level) -> np.ndarray:
+    """剖面 (n, r)（先取累積最小值）第一次降到 level 以下的半徑（線性內插到小數）；一直沒降到＝最後一點。"""
+    s = np.minimum.accumulate(s, axis=1)
+    level = np.broadcast_to(np.asarray(level, np.float32), (len(s),))
+    below = s < level[:, None]
+    j = np.where(below.any(axis=1), below.argmax(axis=1), len(rr) - 1)
+    jm = np.maximum(j - 1, 0)
+    i = np.arange(len(s))
+    a, b = s[i, jm], s[i, j]
+    f = np.clip((a - level) / np.maximum(a - b, 1e-30), 0, 1)
+    return np.where(j > 0, rr[jm] + f * (rr[j] - rr[jm]), rr[0])
+
+
+def _star_shape(rel: np.ndarray) -> np.ndarray:
+    """一群亮度差不多的星的剖面 (k, r)（扣過背景）→ 星點形狀（中心＝1）：中位數剖面 ÷ 中位數峰值（各自除的話
+    某個色版很暗的星會除以接近 0 的數），沿半徑平滑（外圍很淡，平均的長度隨距離變長），只准往外變暗、不小於 0。"""
+    g = np.median(rel, axis=0) / max(float(np.median(rel[:, 0])), 1e-30)
+    cs = np.concatenate([[0.0], np.cumsum(g)])
+    t = np.arange(len(g))
+    half = np.maximum(0, np.round(0.125 * t)).astype(int)
+    lo, hi = np.clip(t - half, 0, len(g) - 1), np.clip(t + half + 1, 1, len(g))
+    g = (cs[hi] - cs[lo]) / (hi - lo)
+    g[0] = 1.0
+    return np.clip(np.minimum.accumulate(g), 0, 1).astype(np.float32)
+
+
+@dataclass
+class StarModel:
+    rr: np.ndarray        # 剖面的半徑（這個解析度的像素）
+    shapes: np.ndarray    # (B, C, r) 各亮度組、各色版的星點形狀（中心＝1）
+    pos: np.ndarray       # (n,) 每顆星在亮度組之間的位置（小數：1.3＝第 1 組和第 2 組 7:3 內插）
+    amp: np.ndarray       # (n, C) 每顆星每色版中心比背景亮多少；不用模型的星（飽和）是 0
+    hole: np.ndarray      # (n,) 挖掉補的半徑（不含外擴）
+    reach: np.ndarray     # (n,) 星光降到 FOOT_LEVEL 倍噪聲的半徑
+    own_idx: np.ndarray | None = None    # 量自己剖面的星（飽和、特別亮的）
+    own_rr: np.ndarray | None = None     # 它們剖面的半徑
+    own_prof: np.ndarray | None = None   # (k, C, r) 它們自己的剖面（扣過背景，絕對值）
+
+    def shape_of(self, i: int) -> np.ndarray:
+        """第 i 顆星的形狀 (C, r)。"""
+        b = int(np.floor(self.pos[i]))
+        f = float(self.pos[i] - b)
+        if b + 1 >= len(self.shapes):
+            return self.shapes[-1]
+        return (1 - f) * self.shapes[b] + f * self.shapes[b + 1]
+
+
+def star_model(planes: np.ndarray, stars, scale: float, hp: np.ndarray | None = None,
+               flat: np.ndarray | None = None) -> StarModel:
+    """每顆星的星點模型與範圍。
+    同一張圖亮度差不多的星形狀都差不多：每 2 倍亮度一組（至少 FOOT_REF_MIN 顆）疊出中位數形狀，
+    每顆星＝自己的峰值 × 自己亮度的形狀（組之間內插；每個色版各自量：藍星的星暈比較大）。不同亮度的形狀不一樣：
+    暗星相對胖（AI 降噪、位置誤差讓峰值偏低），亮星的星暈相對大（LBN576：12 px 處 2000σ 的星是峰值的 0.1%、
+    250σ 的 0.04%）；全部用同一個形狀的話暗星和最亮的星外圍都扣不夠，洞的邊上還有星光、補出來偏亮。
+    - 星核（模型 HOLE_LEVEL 倍噪聲以上）挖掉補：這裡模型差一點就是好幾 σ（反摺積、形狀隨位置變）
+    - 外圍扣模型：星雲的紋路還在。以前整顆挖掉補，範圍小的話邊上還有星光（LBN576 200～2000σ 的星範圍只到 6 px、
+      邊上 2σ，補出來整個洞偏亮，星心殘影 1.5σ）；範圍放大到星光降到 0.3σ 的話密集星場一半的面積被補平，
+      星雲殼的纖維變成一片平滑的光（NGC6888）
+    - 單顆星在 0.3σ 的地方量不準（噪聲、旁邊的星、星雲），以前每顆自己量、暗星常常量得很大（NGC6888 遮罩
+      蓋掉半張圖），只好加上限；用疊出來的形狀就沒有這個問題
+    飽和的（快速預覽上再加很亮的，見下面的 own）量自己的剖面（第 4 暗的方向，避開星雲纖維、旁邊的星），扣自己的剖面；
+    挖掉補的只有各方向明顯不一樣的星核；剖面不再下降（星雲的平台）就停。
+    噪聲：快速預覽時 AI 降噪後的噪聲是相關的，縮小 4 倍噪聲只小 1.6～2.9 倍，用縮圖的噪聲 × √倍率 估完整解析度的。"""
+    C = planes.shape[0]
+    n = len(stars.y)
+    px = 1.0 / max(scale, 1e-6)
+    L = planes.mean(axis=0)
+    rr = _radii_grid(scale, FOOT_RMAX * px)
+    empty = StarModel(rr, np.zeros((0, C, len(rr)), np.float32), np.zeros(n), np.zeros((n, C), np.float32),
+                      np.full(n, 2.0 * px, np.float32), np.full(n, 2.0 * px, np.float32))
+    if n == 0:
+        return empty
+    ys, xs = np.asarray(stars.y, np.float64), np.asarray(stars.x, np.float64)
+    boost = np.sqrt(scale) if scale > 1.5 else 1.0
+    noise = ops.pixel_noise(L) * boost
+    centre, bg, bgq = _centre_bg(L, ys, xs, rr)
+    peak = (centre - bg) / max(noise, 1e-30)
+    if flat is None:
+        flat = saturated_tops(L - _background(L) if hp is None else hp, scale)
+    y = np.clip(np.round(ys).astype(int), 0, L.shape[0] - 1)
+    x = np.clip(np.round(xs).astype(int), 0, L.shape[1] - 1)
+    sat = flat[y, x] | np.asarray(stars.saturated, bool)
+    lp = np.log2(np.maximum(peak, 1.0))
+    chans = [L] if C == 1 else list(planes)
+    cbg = [(centre, bg)] if C == 1 else [_centre_bg(p, ys, xs, rr)[:2] for p in chans]
+    amp = np.maximum(np.stack([c - b for c, b in cbg], axis=1), 0).astype(np.float32)
+    # 亮度分組；形狀只用每組最多 200 顆量（星很多的時候省時間，中位數已經很穩）
+    rng = np.random.default_rng(0)
+    groups = []
+    if (~sat).any():
+        top_lp = lp[~sat].max() if scale <= 1.5 else min(lp[~sat].max(), np.log2(OWN_PEAK))   # 見下面的 own
+        for c0 in np.arange(np.floor(lp[~sat].min()), top_lp + 0.5, 0.5):
+            sel = np.flatnonzero(~sat & (np.abs(lp - c0) < 0.5))
+            if len(sel) < FOOT_REF_MIN:
+                continue
+            groups.append((c0, rng.choice(sel, min(len(sel), 200), replace=False)))
+    if not groups:
+        model = empty
+        own = np.ones(n, bool)
+    else:
+        sub = np.unique(np.concatenate([g for _c, g in groups]))
+        where = np.full(n, -1)
+        where[sub] = np.arange(len(sub))
+        rel_l = _profiles(L, ys[sub], xs[sub], rr)[0] - bg[sub, None]
+        rel_c = [rel_l] if C == 1 else [_profiles(p, ys[sub], xs[sub], rr)[0] - b[sub, None]
+                                        for p, (_c, b) in zip(chans, cbg)]
+        centres = [c0 for c0, _g in groups]
+        sl = np.stack([_star_shape(rel_l[where[g]]) for _c, g in groups])
+        shapes = np.stack([np.stack([_star_shape(rc[where[g]]) for rc in rel_c]) for _c, g in groups])
+        pos = np.interp(lp, centres, np.arange(len(centres)))
+        b = np.floor(pos).astype(int)
+        f = (pos - b)[:, None]
+        gl = (1 - f) * sl[b] + f * sl[np.minimum(b + 1, len(sl) - 1)]       # (n, r) 每顆星的亮度形狀
+        prof = np.maximum(peak, 0)[:, None] * gl                              # 單位：噪聲
+        # 快速預覽：很亮的（OWN_PEAK 以上）、比最亮的那組再亮 2 倍以上的也量自己的。縮小 4 倍後飽和星的平頂被平均掉、
+        # 不算飽和，用最亮那組的形狀扣的話 16～22 px 少扣 3σ，洞整個是一塊亮盤（完整解析度上這些星是飽和的，本來就量自己的）。
+        # 完整解析度不這樣做：沒飽和的亮星用疊的形狀比較準（分組一直分到最亮的星；自己的剖面在「盡頭」切掉、扣掉盡頭外的底，
+        # 盡頭外的星暈還有好幾 σ：LBN576 一顆 14000σ 的星盡頭 19 px、20 px 處還有 4σ，2000σ 以上的星洞裡平均 +0.5～0.9σ，
+        # 疊的形狀 0.1～0.3σ；NGC6888 殼上一顆 3800σ 的星盡頭被星雲撐到 56 px）
+        own = sat.copy()
+        if scale > 1.5:
+            own |= (peak > OWN_PEAK) | (lp > centres[-1] + 1.0)
+        amp[own] = 0
+        model = StarModel(rr, shapes.astype(np.float32), pos, amp,
+                          _crossing(prof, rr, HOLE_LEVEL).astype(np.float32),
+                          _crossing(prof, rr, FOOT_LEVEL).astype(np.float32))
+    hole, reach = model.hole, model.reach
+    top = float(hole[~own].max()) if (~own).any() else 2.0 * px
+    hole = np.clip(hole, 1.5 * px, FOOT_RMAX * px)
+    reach = np.clip(np.maximum(reach, hole), 1.5 * px, FOOT_RMAX * px)
+    if own.any():
+        oi = np.flatnonzero(own)
+        ro = _radii_grid(scale, OWN_RMAX * px)
+        smp = _ring_samples(L, ys[oi], xs[oi], ro)
+        _c, _b, bq = _centre_bg(L, ys[oi], xs[oi], ro)
+        s = _smooth_radial((smp[:, 3] - bq[:, None]) / max(noise, 1e-30))   # 第 4 暗的方向（避開星雲纖維、旁邊的星）
+        # 剖面到哪裡為止：往外 20 px 降不到現在高度（比最外面高多少）的 15%、或降不到 0.15σ。真的星暈越往外越暗得快
+        # （冪次），星雲是平台。只看淡的地方（9σ 以下）：飽和星的平頂也不下降。只看相鄰幾 px 的話太敏感，
+        # 星暈還有 5σ 就停了，整條剖面又扣掉停的地方的值，等於少扣 5σ（快速預覽上亮星一塊亮盤）
+        gap = max(1, int(round(20 * px / max(float(ro[1] - ro[0]), 1e-6))))
+        tail = np.median(s[:, -gap:], axis=1)
+        drop = s[:, :-gap] - s[:, gap:]
+        height = s[:, :-gap] - tail[:, None]
+        flat = ((drop < 0.15 * height) | (drop < 0.5 * FOOT_LEVEL)) & (s[:, :-gap] < 30 * FOOT_LEVEL)
+        # 各方向的差異（第 4 暗和第 4 亮的方向差，扣掉噪聲本身的差）
+        spread = (smp[:, 12] - smp[:, 3]) / 1.35 / max(noise, 1e-30)
+        excess = _smooth_radial(np.sqrt(np.maximum(spread * spread - 1.0, 0)))
+        # 挖掉補的範圍：最外面一個「各方向還明顯不一樣、星光還有 HOLE_LEVEL 以上」的半徑（反摺積、繞射芒、色差）。
+        # 不能用第一次一致的地方：飽和的平頂各方向一樣高。更外面的星暈各方向一樣，扣自己的剖面就乾淨
+        # （以前挖到星光降到 3σ：一顆 37000σ 的星要挖 80 px）
+        # 「星暈」比各方向的差異還小＝其實是星雲（弧形的星雲取各方向中位數也是越往外越暗），停在那裡。先決定到哪裡停，
+        # 洞再限制在那之內：星雲上各方向本來就不一樣、也比遠處亮 3σ 以上，不限制的話洞一路擴到 120 px
+        # （NGC6888 殼上的亮星，整片纖維被抹平）
+        flat |= (height < excess[:, :-gap]) & (s[:, :-gap] < 30 * FOOT_LEVEL)
+        flat = np.concatenate([flat, np.ones((len(s), gap), bool)], axis=1)
+        j_stop = flat.argmax(axis=1)
+        stop = ro[j_stop]
+        uneven = (excess >= 1.0) & (s >= HOLE_LEVEL) & (np.arange(len(ro))[None, :] <= j_stop[:, None])
+        last = np.where(uneven.any(axis=1), len(ro) - 1 - np.argmax(uneven[:, ::-1], axis=1), 0)
+        after = (np.arange(len(ro))[None, :] >= j_stop[:, None]) & (np.arange(len(ro))[None, :] < j_stop[:, None] + gap)
+        # 至少跟用形狀算的一樣大（沒飽和的亮星：只挖各方向不一樣的地方的話洞比較小）
+        own_h = np.minimum(ro[last] + ro[1] - ro[0], stop)
+        hole[oi] = np.clip(np.maximum(own_h, hole[oi]), top, OWN_RMAX * px)
+        reach[oi] = np.maximum(np.minimum(_crossing(s, ro, FOOT_LEVEL), stop), hole[oi])
+        # 模型：每色版自己的剖面（各方向的中位數；不對稱的部分在挖掉的範圍裡），平滑、只准往外變暗，
+        # 扣掉盡頭外面那一段的中位數當底（不扣星雲的平台），盡頭以外是 0
+        profs = []
+        for P in chans:
+            _cc, bgc, _bq = _centre_bg(P, ys[oi], xs[oi], ro)
+            lo = _smooth_radial(_profiles(P, ys[oi], xs[oi], ro)[0] - bgc[:, None])
+            floor = np.array([np.median(lo[i, after[i]]) for i in range(len(oi))])
+            lo = np.clip(np.minimum.accumulate(lo, axis=1) - floor[:, None], 0, None)
+            lo[ro[None, :] > stop[:, None]] = 0
+            profs.append(lo)
+        model.own_idx, model.own_rr, model.own_prof = oi, ro, np.stack(profs, axis=1).astype(np.float32)
+    model.hole, model.reach = hole, reach
+    return model
+
+
+def _smooth_radial(p: np.ndarray) -> np.ndarray:
+    """剖面 (n, r) 沿半徑平滑，平均的長度隨距離變長（距離的 1/4；外圍很淡要平均才量得到，靠近星核不能平均）。"""
+    cs = np.concatenate([np.zeros((len(p), 1)), np.cumsum(p, axis=1)], axis=1)
+    t = np.arange(p.shape[1])
+    half = np.maximum(0, np.round(0.125 * t)).astype(int)
+    lo, hi = np.clip(t - half, 0, p.shape[1] - 1), np.clip(t + half + 1, 1, p.shape[1])
+    return ((cs[:, hi] - cs[:, lo]) / (hi - lo)).astype(np.float32)
+
+
+def render_stars(model: StarModel, stars, shape: tuple[int, int], floor: np.ndarray) -> np.ndarray:
+    """星點模型畫成影像 (C, H, W)：每顆星畫到模型降到 floor（每色版，通常是噪聲的 5%）為止。"""
+    C = model.amp.shape[1]
+    h, w = shape
+    out = np.zeros((C, h, w), np.float32)
+    rr = model.rr
+    if model.own_idx is not None:                   # 飽和、特別亮的星：自己的剖面
+        ro = model.own_rr
+        so = float(ro[1] - ro[0]) if len(ro) > 1 else 1.0
+        for j, i in enumerate(model.own_idx):
+            g = model.own_prof[j]                                       # (C, r)
+            R = max(float(_crossing(g[c][None], ro, floor[c])[0]) for c in range(C))
+            _paint(out, float(stars.y[i]), float(stars.x[i]), R, g, so)
+    idx = np.flatnonzero(model.amp.max(axis=1) > 0)
+    if len(idx) == 0 or len(model.shapes) == 0:
+        return out
+    pos = model.pos[idx]
+    b = np.floor(pos).astype(int)
+    f = (pos - b)[:, None, None]
+    G = (1 - f) * model.shapes[b] + f * model.shapes[np.minimum(b + 1, len(model.shapes) - 1)]   # (k, C, r)
+    A = model.amp[idx]
+    reach = np.max([_crossing(A[:, c, None] * G[:, c], rr, floor[c]) for c in range(C)], axis=0)
+    step = float(rr[1] - rr[0]) if len(rr) > 1 else 1.0
+    for j, i in enumerate(idx):
+        _paint(out, float(stars.y[i]), float(stars.x[i]), float(reach[j]), G[j] * A[j][:, None], step)
+    return out
+
+
+def _paint(out: np.ndarray, cy: float, cx: float, R: float, g: np.ndarray, step: float) -> None:
+    """一顆星的剖面 g (C, r)（每 step 像素一點）畫到 out 上，畫到半徑 R。"""
+    if R <= 0:
+        return
+    h, w = out.shape[1:]
+    y0, y1 = int(max(0, np.floor(cy - R))), int(min(h, np.ceil(cy + R) + 1))
+    x0, x1 = int(max(0, np.floor(cx - R))), int(min(w, np.ceil(cx + R) + 1))
+    if y1 <= y0 or x1 <= x0:
+        return
+    last = g.shape[1] - 1
+    yy, xx = np.ogrid[y0:y1, x0:x1]
+    t = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2) / step
+    k0 = np.minimum(t.astype(int), last)
+    k1 = np.minimum(k0 + 1, last)
+    fr = (t - k0).astype(np.float32)
+    out[:, y0:y1, x0:x1] += np.where(t <= last, g[:, k0] * (1 - fr) + g[:, k1] * fr, 0.0)
 
 
 SHARPNESS = 0.2     # 星點的尖銳度門檻（見 sharpness）
@@ -429,12 +779,18 @@ def flat_tops(hp: np.ndarray, scale: float) -> np.ndarray:
     return (hp >= 0.90 * top) & (low >= 0.85 * top) & (top > 50 * sigma)
 
 
-def star_like(L: np.ndarray, stars, scale: float) -> np.ndarray:
+def saturated_tops(hp: np.ndarray, scale: float) -> np.ndarray:
+    """飽和的平頂（flat_tops）外擴 1 px：星心落在這裡的星當飽和。"""
+    return ndimage.binary_dilation(flat_tops(hp, scale), iterations=1)
+
+
+def star_like(L: np.ndarray, stars, scale: float, hp: np.ndarray | None = None,
+              flat: np.ndarray | None = None) -> np.ndarray:
     """找星結果裡每顆星是不是真的星：各方向對稱（二重不對稱 < ANISOTROPY），而且夠尖銳（≥ SHARPNESS）
-    或是飽和的平頂（平頂不尖銳）。回傳 bool 陣列。"""
+    或是飽和的平頂（平頂不尖銳）。回傳 bool 陣列。hp（扣掉背景的 L）、flat（saturated_tops）有算好的話傳進來。"""
     if len(stars.y) == 0:
         return np.zeros(0, bool)
-    hp = L - _background(L)
+    hp = L - _background(L) if hp is None else hp
     fine = L - ops.blur(L, max(1.5 / max(scale, 1e-6), 1.0))
     h, w = L.shape
     fmax = ndimage.maximum_filter(fine, size=3)
@@ -444,7 +800,7 @@ def star_like(L: np.ndarray, stars, scale: float) -> np.ndarray:
     sharp = fmax[y, x] / np.maximum(hmax[y, x], 1e-12) >= sharp_limit(scale)
     round_ = anisotropy(L, stars, scale) < ANISOTROPY
     # 飽和的平頂星核尖銳度接近 0：用平頂判斷（找星自己的飽和旗標只認得整張最亮的那顆）
-    flat = ndimage.binary_dilation(flat_tops(hp, scale), iterations=1)
+    flat = saturated_tops(hp, scale) if flat is None else flat
     sat = flat[y, x] | stars.saturated
     return round_ & (sharp | sat)
 
@@ -464,20 +820,22 @@ def recenter_stars(L: np.ndarray, stars, scale: float):
     peaks = (Ls == ndimage.maximum_filter(Ls, size=size)) & stars.mask
     py, px = np.nonzero(peaks)
     comp = lab[py, px]
-    cmax = np.asarray(ndimage.maximum(Ls, lab, index=np.arange(n + 1)))
+    cmax = _label_max(Ls, lab, n)
     ok = Ls[py, px] >= 0.25 * cmax[comp]
     py, px, comp = py[ok], px[ok], comp[ok]
     has = np.zeros(n + 1, bool)
     has[comp] = True
     h, w = L.shape
-    yy, xx = np.empty(len(py)), np.empty(len(py))
-    for k, (y, x) in enumerate(zip(py, px)):           # 3×3 加權重心（小數位置）
-        y0, y1, x0, x1 = max(0, y - 1), min(h, y + 2), max(0, x - 1), min(w, x + 2)
-        win = Ls[y0:y1, x0:x1]
-        wt = win - win.min()
-        tot = float(wt.sum()) or 1.0
-        gy, gx = np.mgrid[y0:y1, x0:x1]
-        yy[k], xx[k] = float((gy * wt).sum()) / tot, float((gx * wt).sum()) / tot
+    # 3×3 加權重心（小數位置；影像邊上只用裡面的像素）
+    oy, ox = np.mgrid[-1:2, -1:2].reshape(2, 1, 9)
+    gy, gx = py[:, None] + oy[0], px[:, None] + ox[0]
+    inb = (gy >= 0) & (gy < h) & (gx >= 0) & (gx < w)
+    win = Ls[np.clip(gy, 0, h - 1), np.clip(gx, 0, w - 1)]
+    wt = (win - np.where(inb, win, np.inf).min(axis=1, keepdims=True)) * inb
+    tot = wt.sum(axis=1)
+    tot = np.where(tot > 0, tot, 1.0)
+    yy = np.where(wt.sum(axis=1) > 0, (gy * wt).sum(axis=1) / tot, py).astype(np.float64)
+    xx = np.where(wt.sum(axis=1) > 0, (gx * wt).sum(axis=1) / tot, px).astype(np.float64)
     idx = comp - 1
     miss = np.flatnonzero(~has[1:])                    # 沒找到亮點的塊（平頂整片一樣高）：保留原本的
     ys = np.concatenate([yy, stars.y[miss]])
@@ -552,24 +910,174 @@ def bright_neighbours(L: np.ndarray, mask: np.ndarray, scale: float, noise_boost
     lab, n = ndimage.label(bright)
     if n == 0:
         return np.zeros_like(mask)
-    sizes = ndimage.sum(np.ones_like(L), lab, index=np.arange(1, n + 1))
+    by, bx = np.nonzero(bright)
+    li = lab[by, bx]
+    sizes = np.bincount(li, minlength=n + 1)[1:]
     # 補洞只用遮罩邊上的像素（調和內插）：貼著遮罩（2 px 內）的才要遮。以前的補法會用到遮罩外約 9 px，
     # M31 一對離遮罩 5 px 的雙星被抹進補的區域，變成一塊灰白色的盾牌形光斑，那時候範圍是 12 px
     near = ndimage.binary_dilation(mask, iterations=int(round(2 / max(scale, 1e-6))) + 1)
-    touching = ndimage.maximum(near, lab, index=np.arange(1, n + 1)) > 0
-    within = ndimage.minimum(mask, lab, index=np.arange(1, n + 1)) == 0      # 還沒有整個被遮住
+    touching = np.bincount(li, near[by, bx], minlength=n + 1)[1:] > 0
+    within = np.bincount(li, ~mask[by, bx], minlength=n + 1)[1:] > 0          # 還沒有整個被遮住
     small = sizes <= 300 / max(scale, 1e-6) ** 2
-    # 要像星：尖銳（星雲的亮結、纖維片段平緩，不能納入）
-    sharp = ndimage.maximum(sharpness(L, scale, hp) * bright, lab, index=np.arange(1, n + 1)) >= sharp_limit(scale)
-    cand = np.flatnonzero(touching & within & small & sharp)
+    cand = np.flatnonzero(touching & within & small)
     keep = np.zeros(n + 1, bool)
+    if len(cand):
+        # 要像星：尖銳（星雲的亮結、纖維片段平緩，不能納入）
+        sh = np.full(n + 1, -np.inf)
+        np.maximum.at(sh, li, sharpness(L, scale, hp)[by, bx])
+        cand = cand[sh[cand + 1] >= sharp_limit(scale)]
     if len(cand):
         # 而且要圓（星雲纖維上的亮結一邊亮一邊暗，NGC6888 的纖維沿著遮罩一段段被補掉）
         from types import SimpleNamespace
-        pos = ndimage.maximum_position(hp, lab, index=cand + 1)
-        pts = SimpleNamespace(y=np.array([q[0] for q in pos], float), x=np.array([q[1] for q in pos], float))
-        keep[cand + 1] = anisotropy(L, pts, scale) < ANISOTROPY
+        sel = np.isin(li, cand + 1)
+        cy, cx, cl, cv = by[sel], bx[sel], li[sel], hp[by[sel], bx[sel]]
+        o = np.lexsort((-cv, cl))                    # 每塊最亮的像素排在最前面
+        first = np.concatenate([[True], cl[o][1:] != cl[o][:-1]])
+        top = o[first]
+        pts = SimpleNamespace(y=cy[top].astype(float), x=cx[top].astype(float))
+        keep[cl[top]] = anisotropy(L, pts, scale) < ANISOTROPY
     return ndimage.binary_dilation(keep[lab], iterations=2)
+
+
+TEXTURE_SCALE = 6.0   # 紋理：幾 px（完整尺寸）以下的起伏從別處搬（AI 降噪後的噪聲一團一團的，2～16 px 都有）
+TEXTURE_TILE = 48     # 一次搬一塊幾 px（完整尺寸）
+
+
+def _masked_blur(planes: np.ndarray, valid: np.ndarray, sigma: float) -> np.ndarray:
+    """只用 valid 的像素模糊（正規化卷積），(C, H, W)。"""
+    v = valid.astype(np.float32)
+    den = np.maximum(ops.blur(v, sigma), 1e-6)
+    return np.stack([ops.blur((p * v).astype(np.float32), sigma) / den for p in planes]).astype(np.float32)
+
+
+AI_FILL_MIN = 6.0     # AI 只補最深處離洞邊 AI_FILL_MIN px（完整尺寸）以上的洞
+
+
+def big_holes(mask: np.ndarray, scale: float) -> np.ndarray:
+    """大的洞（整個連通的洞，只要有一處離洞邊 AI_FILL_MIN px 以上）。"""
+    r = max(1, int(round(AI_FILL_MIN / max(scale, 1e-6))))
+    core = ndimage.binary_erosion(mask, iterations=r)
+    return ndimage.binary_propagation(core, mask=mask) if core.any() else core
+
+
+def fill_holes(base: np.ndarray, mask: np.ndarray, scale: float, cancel=lambda: None) -> np.ndarray:
+    """洞用周圍補（調和內插），但邊界先稍微去噪（洞外 1 px 的模糊，只用洞外的像素）：調和內插直接用邊上的像素，
+    邊上一個噪點會變成洞裡一塊平滑的亮斑或暗斑。只模糊 1 px：模糊 6 px 的話星雲結構強的地方邊界跟實際差很多，
+    每個洞的邊都看得到（NGC6888）。洞外照原樣。"""
+    B = _masked_blur(base, ~mask, 1.0 / max(scale, 1e-6))
+    return np.where(mask[None], backend.harmonic_fill(B, mask, cancel), base).astype(np.float32)
+
+
+def _noise_curve(level: np.ndarray, noise: np.ndarray):
+    """一塊塊的（亮度, 噪聲）→ 噪聲隨亮度的曲線：依亮度分 20 組，每組取比較低的 30%（有星雲結構、漏掉的暗星的塊
+    量到的「噪聲」偏大），只准隨亮度變大（光子噪聲）。回傳 f(亮度)。"""
+    ok = np.isfinite(level) & np.isfinite(noise) & (noise > 0)
+    level, noise = level[ok], noise[ok]
+    if len(level) < 8:
+        m = float(np.median(noise)) if len(noise) else 1e-12
+        return lambda v: np.full(np.shape(v), max(m, 1e-12), np.float32)
+    order = np.argsort(level)
+    groups = np.array_split(order, min(20, max(2, len(order) // 8)))
+    lv = np.array([np.median(level[g]) for g in groups])
+    nz = np.maximum.accumulate(np.array([np.percentile(noise[g], 30) for g in groups]))
+    return lambda v: np.maximum(np.interp(v, lv, nz), 1e-12).astype(np.float32)
+
+
+def match_texture(base: np.ndarray, mask: np.ndarray, filled: np.ndarray, scale: float, seed: int = 12345) -> np.ndarray:
+    """洞裡補上這張圖自己的噪聲紋理，回傳 filled＋紋理（洞外不動）。
+    紋理＝洞外 TEXTURE_SCALE px 以下的起伏（高通，只用洞外的像素算），一塊塊（TEXTURE_TILE px）搬進洞裡：每一塊在
+    16 個隨機的地方裡挑亮度（噪聲強度）接近、沒有星雲結構、搬過去的像素都不在別的洞裡的，再乘上兩邊噪聲強度的比
+    （光子噪聲隨亮度變；噪聲強度用「噪聲隨亮度的曲線」，不直接量：星雲裡直接量會被結構撐大，從暗天空搬來的噪聲
+    被放大好幾倍，星雲邊上一片暗的碎點，NGC6888）。洞邊 2 px 內漸入（邊上的噪聲調和內插已經帶進來一些）。
+    以前補白噪聲（強度用整張天空量一個，三色同一份）：AI 降噪後真正的噪聲是相關的（相鄰像素相關 +0.3），
+    白噪聲是 −0.1，強拉伸後每個洞都是一塊顆粒細、看起來偏暗的圓（LBN576 的亮星）。"""
+    C, h, w = base.shape
+    if not mask.any():
+        return filled
+    px = 1.0 / max(scale, 1e-6)
+    s = TEXTURE_SCALE * px
+    D = base - _masked_blur(base, ~mask, s)
+    # 可以搬的地方：洞外 2 px 以外（高通只用洞外的像素算，洞邊也量得對；外擴 6 px 的話密集星場剩不到一半）
+    src_ok = ~ndimage.binary_dilation(mask, iterations=max(1, int(round(2 * px))))
+    if src_ok.mean() < 0.05:
+        return filled
+    T = max(4, int(round(TEXTURE_TILE * px)))
+    ny, nx = -(-h // T), -(-w // T)
+    pad = ((0, ny * T - h), (0, nx * T - w))
+    lev = ops.blur(filled.mean(axis=0).astype(np.float32), 2 * s)          # 亮度（洞裡是補過的）
+
+    sub = max(1, T // 16)                    # 每塊的統計只取一部分像素（中位數夠穩，省時間）
+
+    def tiles(a, fill):
+        t = np.pad(a.astype(np.float32), pad, constant_values=fill).reshape(ny, T, nx, T)
+        return t[:, ::sub, :, ::sub].transpose(0, 2, 1, 3).reshape(ny * nx, -1)
+    okt = tiles(src_ok, 0) > 0
+    dl = np.where(okt, tiles(D.mean(axis=0), 0), np.nan)
+    with warnings.catch_warnings():                 # 整塊都不能用的塊全是 NaN
+        warnings.simplefilter("ignore", RuntimeWarning)
+        mad = 1.4826 * np.nanmedian(np.abs(dl - np.nanmedian(dl, axis=1, keepdims=True)), axis=1)
+        levt = np.nanmedian(np.where(okt, tiles(lev, 0), np.nan), axis=1)
+    enough = okt.mean(axis=1) > 0.3
+    curve = _noise_curve(levt[enough], mad[enough])
+    # 來源不要有星點（沒找到的暗星、快速預覽上去不掉的星）：高通後是一個亮點＋一圈負的，搬進洞裡就是複製一顆星
+    # 和幾個黑點（LBN576 快速預覽，亮星的洞裡）。超過 4 倍當地噪聲的像素外擴 2 px 都不搬
+    noise_here = curve(lev)
+    spot = np.abs(D.mean(axis=0)) > 4.0 * noise_here
+    src_ok &= ~ndimage.binary_dilation(spot, iterations=max(1, int(round(2 * px))) + 1)
+    levt_all = tiles(lev, 0).mean(axis=1)
+    fl = np.log(curve(levt_all))
+    struct = np.where(enough, np.abs(np.log(np.maximum(mad, 1e-30)) - np.log(curve(levt))), np.inf)
+    rng = np.random.default_rng(seed)
+    K = 16
+    cy = rng.integers(0, ny, (ny * nx, K))
+    cx = rng.integers(0, nx, (ny * nx, K))
+    ys, xs = np.nonzero(mask)
+    tyi, txi, oy, ox = ys // T, xs // T, ys % T, xs % T
+    tid = tyi * nx + txi
+    # 每個候選：這一塊洞裡的像素搬過去的地方有多少可以用（剛好是別的星的洞就不行）。一塊裡的像素盡量從同一個地方搬，
+    # 東拼西湊的話相鄰像素來自不同地方、不相關，紋理比周圍碎
+    def usable(i, k):
+        sy, sx = cy[tid[i], k] * T + oy[i], cx[tid[i], k] * T + ox[i]
+        return (sy < h) & (sx < w) & src_ok[np.minimum(sy, h - 1), np.minimum(sx, w - 1)]
+    probe = np.arange(0, len(ys), 5)                 # 評分只用一部分像素
+    count = np.maximum(np.bincount(tid[probe], minlength=ny * nx), 1)
+    frac = np.stack([np.bincount(tid[probe], weights=usable(probe, k), minlength=ny * nx) for k in range(K)],
+                    axis=1) / count[:, None]
+    src = cy * nx + cx
+    score = np.abs(fl[src] - fl[:, None]) + struct[src] + 3.0 * (1.0 - frac)
+    score[src == np.arange(ny * nx)[:, None]] = np.inf
+    order = np.argsort(score, axis=1)
+    nt = curve(lev[ys, xs])
+    tex = np.zeros((C, len(ys)), np.float32)
+    done = np.zeros(len(ys), bool)
+    for r in range(K):                      # 先用最好的候選，搬不到的像素換下一個
+        left = np.flatnonzero(~done)
+        if len(left) == 0:
+            break
+        k = order[tid[left], r]
+        g = left[usable(left, k)]
+        k = order[tid[g], r]
+        sy = cy[tid[g], k] * T + oy[g]
+        sx = cx[tid[g], k] * T + ox[g]
+        ratio = np.clip(nt[g] / curve(lev[sy, sx]), 0.25, 4.0)
+        for c in range(C):                  # 保險：再限制在 ±8 倍噪聲（各色版的噪聲比亮度大，不切到真的噪聲）
+            tex[c, g] = np.clip(D[c, sy, sx] * ratio, -8.0 * nt[g], 8.0 * nt[g])
+        done[g] = True
+    rest = np.flatnonzero(~done)            # 都找不到：白噪聲
+    if len(rest):
+        z = rng.standard_normal(len(rest)).astype(np.float32)
+        for c in range(C):
+            tex[c, rest] = z * nt[rest]
+    # 洞邊漸入：最外一圈 1/3、第二圈 2/3（完整尺寸；快速預覽的一個像素已經是 4 px，不用漸入）
+    if px > 0.5:
+        inner1 = ndimage.binary_erosion(mask, iterations=1)
+        inner2 = ndimage.binary_erosion(inner1, iterations=1)
+        ramp = ((1.0 + inner1[ys, xs] + inner2[ys, xs]) / 3.0).astype(np.float32)
+    else:
+        ramp = 1.0
+    out = filled.copy()
+    out[:, ys, xs] += tex * ramp
+    return out
 
 
 def smooth_star_colour(stars: np.ndarray, sigma: float) -> np.ndarray:
@@ -597,7 +1105,7 @@ class StarSplit(Tool):
     auto_layer = "main"
 
     def defaults(self) -> dict:
-        return {"threshold": 5.0, "grow": 2.0, "texture": True, "spikes": True, "fringes": True}
+        return {"threshold": 5.0, "grow": 2.0, "texture": True, "spikes": True, "fringes": True, "ai_fill": True}
 
     def controls(self) -> list[dict]:
         return [
@@ -606,6 +1114,10 @@ class StarSplit(Tool):
                                                                     "nebula knots.")),
             slider("grow", T("範圍外擴", "Grow"), 0, 12, 0.5, "{:.1f} px",
                    help=T("無星圖上留下星暈的話調大。", "Increase if halos remain on the starless image.")),
+            toggle("ai_fill", T("用 AI 補星點的洞", "Fill star holes with AI"),
+                   help=T("用周圍的樣子補（延續星雲的紋路、亮暗）；關掉的話用平滑的內插。沒有 AI 模型時自動用內插。",
+                          "Continues the surrounding nebula structure into the holes; off uses smooth interpolation. "
+                          "Falls back to interpolation when the AI model is missing.")),
             toggle("texture", T("補上噪聲紋理", "Match noise texture")),
             toggle("fringes", T("修正星點色邊", "Fix star colour fringes"),
                    help=T("三色的星點位置、大小不一樣（色差、大氣色散）時，亮星會一邊紅一邊青或外圍一圈紅；"
@@ -627,17 +1139,26 @@ class StarSplit(Tool):
         ctx.layer = "main"
         img = ops.planes(state.layers["main"])
         L = img.mean(axis=0)
-        # 前面有 AI 降噪的話噪聲變小，門檻乘回一部分（開根號）：整個乘回去（跟不用 AI 時一樣）的話，
-        # AI 後看得清楚的暗星沒抓到、留在無星圖上，拉伸後一顆顆很明顯（LBN576）；完全不乘又會抓到 AI 的紋理
-        boost = float(state.notes.get("main", {}).get("detail_noise_ratio", 1.0))
-        stars = pdetail.find_stars(L, float(params.get("threshold", 5.0)) * np.sqrt(max(boost, 1.0)))
+        stars = detect_stars(L, float(params.get("threshold", 5.0)))
         stars = recenter_stars(L, stars, ctx.scale)
+        hp = L - _background(L)
+        flat = saturated_tops(hp, ctx.scale)
         # 星雲的亮結也會被找星抓到：不夠尖銳的不當星（留在無星圖）
-        like = star_like(L, stars, ctx.scale)
+        like = star_like(L, stars, ctx.scale, hp, flat)
         ctx.view["not_stars"] = int((~like).sum())
         stars = keep_stars(stars, like)
         ctx.check()
-        mask, core_r = star_footprints(L, stars, ctx.scale, float(params.get("grow", 2.0)))
+        # 星點模型：星核挖掉補，外圍扣模型（見 star_model）。後面量星暈、繞射芒、暗環都在扣過模型的影像上量
+        grow = float(params.get("grow", 2.0)) / ctx.scale
+        model = star_model(img, stars, ctx.scale, hp, flat)
+        floor = 0.05 * np.array([ops.pixel_noise(p) for p in img])
+        wings = render_stars(model, stars, L.shape, floor)
+        img_all, L_all = img, L
+        img = img - wings
+        L = img.mean(axis=0)
+        core_r = model.hole
+        mask = _discs(L.shape, stars.y, stars.x, core_r + grow)
+        ctx.check()
         halos = None
         if params.get("spikes", True):
             ratio = state.notes.get("main", {}).get("noise_ratio")
@@ -655,22 +1176,42 @@ class StarSplit(Tool):
         ratio = state.notes.get("main", {}).get("noise_ratio")
         mask |= bright_neighbours(L, mask, ctx.scale, float(ratio[0]) if ratio else 1.0)
         mask |= dark_rings(L, stars, core_r + float(params.get("grow", 2.0)) / ctx.scale, ctx.scale)
+        ctx.view["holes"] = mask                       # 實際補掉的範圍（給檢查工具、之後介面顯示用）
         ctx.progress(0.4, "inpaint")
         if halos is not None:
-            # 星暈只扣超過 1 倍噪聲的部分（r²／(r＋σ)），無星圖扣多少、星點層就放多少：星暈外圍量到噪聲裡
+            # 星暈淡的部分少扣一點（r²／(r＋0.3σ)），無星圖扣多少、星點層就放多少：星暈外圍量到噪聲裡
             # （AI 降噪後量得很遠），整個扣的話中等亮度的星周圍各有一圈淡淡的光盤；只在星點層打折的話，
-            # 淡的星暈兩邊都沒了，合成後每顆星的位置一個暗洞
+            # 淡的星暈兩邊都沒了，合成後每顆星的位置一個暗洞。以前是 r²／(r＋σ)：星暈再亮都留 1σ，亮星整個洞偏亮
             for c in range(img.shape[0]):
-                n = ops.pixel_noise(img[c])
+                n = FOOT_LEVEL * ops.pixel_noise(img[c])
                 halos[c] = halos[c] * halos[c] / (halos[c] + n + 1e-12)
-        smooth = backend.harmonic_fill(img - halos if halos is not None else img, mask, ctx.check)
+        base = img - halos if halos is not None else img
+        smooth = fill_holes(base, mask, ctx.scale, ctx.check)
         ctx.check()
+        if params.get("ai_fill", True):
+            from . import ai as tai
+            big = big_holes(mask, ctx.scale)
+            if tai.available_inpaint() and big.any():
+                # 平滑內插在大的洞（亮星、星暈）中間是一塊沒有紋路的平面；AI 延續周圍星雲的樣子。
+                # 小的洞內插＋噪聲紋理就跟周圍一樣了（第二、三步之後量的），不用 AI
+                notes = state.notes.get("main", {})
+                ratio = notes.get("pixel_noise_ratio") or (notes.get("denoise_ratio") or (1.0,))[0]
+                smooth = tai.inpaint_planes(base, mask, smooth, ctx, float(ratio), only=big)
+                ctx.check()
         # 星點層＝原圖 − 補好的背景，但先扣掉 1 倍噪聲再去負值：直接去負值的話正的噪聲留下、負的切掉，
         # 每顆星周圍多一個帶噪聲的亮盤（遮罩範圍），合成後變成一圈光暈。遮罩邊緣漸變
         # 遮罩邊緣往內 4 px 漸變、噪聲門檻用平滑的曲線（r²／(r＋σ)，大的值≈r−σ），不然星點層拉伸後
         # 光暈在遮罩邊緣突然切掉，星點外圍看起來有一圈邊
-        resid = img - smooth
-        dist = ndimage.distance_transform_edt(mask)
+        resid = img_all - smooth
+        # 遮罩邊緣往內的距離（只需要到 4 px；整張的距離轉換很慢）
+        reach = int(np.ceil(4.0 / ctx.scale))
+        dist = np.zeros(mask.shape, np.float32)
+        inner = mask
+        for _k in range(reach + 1):
+            dist += inner
+            inner = ndimage.binary_erosion(inner, iterations=1)
+            if not inner.any():
+                break
         edge = ops.smoothstep(0.0, 4.0 / ctx.scale, dist).astype(np.float32)
         layers = []
         for c in range(img.shape[0]):
@@ -680,7 +1221,7 @@ class StarSplit(Tool):
             rb = ops.blur(resid[c].astype(np.float32), 1.2 / ctx.scale)
             sharp = ops.smoothstep(3.0 * n, 12.0 * n, rb)
             r = np.maximum(resid[c] * sharp + rb * (1.0 - sharp), 0)
-            soft = r * r / (r + n + 1e-12) * edge
+            soft = r * r / (r + n + 1e-12) * edge + wings[c] * (1.0 - edge)
             if halos is not None:
                 soft += halos[c] * (1.0 - edge)
             layers.append(soft)
@@ -689,20 +1230,7 @@ class StarSplit(Tool):
             stars_layer = smooth_star_colour(stars_layer, 2.0 / ctx.scale)
         starless = smooth
         if params.get("texture", True):
-            # 噪聲紋理：整張天空量一個噪聲（星點以外的高頻），亮的地方照光子噪聲（∝√亮度）放大；
-            # 三色用同一份紋理（去馬賽克後的噪聲本來就三色相關），按各色亮度比例分配
-            rng = np.random.default_rng(12345)
-            hp = (L - ops.blur(L, 1.0))[~mask]
-            _m, sigma0 = ops.robust_stats(hp)
-            sky, _s = ops.robust_stats(L[~mask] if ctx.ref is None else ctx.whole(img).mean(axis=0))
-            level = ops.blur(smooth.mean(axis=0), 3.0)
-            ref = max(abs(sky), 1e-6)
-            sigma = sigma0 * 1.15 * np.sqrt(np.clip(np.maximum(level, ref) / ref, 1.0, 16.0))
-            grain = rng.standard_normal(L.shape).astype(np.float32) * sigma * ops.blur(mask.astype(np.float32), 0.7)
-            Ls = np.maximum(smooth.mean(axis=0), 1e-9)
-            for c in range(img.shape[0]):
-                share = np.clip(smooth[c] / Ls, 0.3, 3.0) if img.shape[0] > 1 else 1.0
-                starless[c] = starless[c] + grain * share
+            starless = match_texture(base, mask, smooth, ctx.scale)
         out.layers = {"starless": starless.astype(np.float32), "stars": stars_layer}
         ph = state.phase.get("main", "linear")
         out.phase = {"starless": ph, "stars": ph}
