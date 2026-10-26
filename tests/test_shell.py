@@ -57,6 +57,21 @@ def test_startup_recipe_goes_to_process(app, window, tmp_path, monkeypatch):
     assert window.step.get() == "process" and opened == [recipe]
 
 
+def test_studio_buttons_enabled_after_open(app, window, tmp_path):
+    # 0.1.3／0.1.4：開好圖後出圖、專案、檢視切換還是停用，要切換語言（整頁重建）才能按
+    import numpy as np
+    from astropy.io import fits
+    img = tmp_path / "x.fits"
+    rng = np.random.default_rng(0)
+    fits.writeto(img, (0.1 + 0.01 * rng.standard_normal((3, 120, 160))).astype(np.float32))
+    window.step.set("process")
+    page = window.page("process")
+    assert not page.export_btn.isEnabled()
+    page.open_paths([img])
+    pump(app, 30.0, lambda: page.chain.source is not None and not page.loading)
+    assert page.export_btn.isEnabled() and page.project_btn.isEnabled() and page.view_seg.isEnabled()
+
+
 def test_close_without_work(app, window):
     assert not any(p.is_busy() for p in window.pages.values())
     assert window.close()

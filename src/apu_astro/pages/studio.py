@@ -235,7 +235,9 @@ class StudioPage(Page):
         self.selected = len(self.chain.steps) - 1
         self._fill_steps()
         self._build_inspector()
-        self.center.setCurrentIndex(1)
+        # 整頁狀態跟著「有圖了」更新（出圖、專案、檢視切換）：以前只切畫面，那幾顆按鍵停在還沒開圖時的停用狀態，
+        # 要切換語言（整頁重建）才能按（0.1.3、0.1.4）
+        self.refresh()
         self.image.set_image(None)
         self.title_changed.emit()
         shape = src.image.shape
