@@ -39,7 +39,8 @@
 在 zip 上按右鍵 →「全部解壓縮」，雙擊 `APUAstro.exe`。出現「Windows 已保護您的電腦」時，按「其他資訊」→「仍要執行」
 （程式沒有購買數位簽章）。
 
-有 NVIDIA 顯示卡時疊圖與後製會用它加速；AI 降噪可以用任何支援 DirectX 12 的顯示卡。沒有獨立顯示卡也能用，只是比較慢。
+有 NVIDIA 顯示卡時疊圖與後製會用它加速，GPU 需要的檔案程式都帶了，不用另外安裝 CUDA，電腦上裝的 CUDA 版本也不影響；
+AI 降噪可以用任何支援 DirectX 12 的顯示卡。沒有獨立顯示卡也能用，只是比較慢。
 
 ## 使用方式
 
@@ -69,7 +70,7 @@ python -m venv .venv
 .venv\Scripts\python packaging\build_exe.py  # 打包 → dist\APUAstro-<版本>-win64.zip
 ```
 
-需要 APU Pick、APU Photons、APU Processing 三個 repo 放在同一層，用 editable 安裝；Photons 要在 `v0.2` 分支
+需要 APU Pick、APU Photons、APU Processing 三個 repo 放在同一層，用 editable 安裝；Photons 要 0.2 以上
 （打包前會檢查版本）。matplotlib 只是打包時要有（astropy 的打包規則會載入它的繪圖模組），不會包進程式。
 
 ## 授權
