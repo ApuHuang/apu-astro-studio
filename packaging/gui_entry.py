@@ -15,6 +15,17 @@ import multiprocessing
 import sys
 
 
+def use_bundled_cuda_headers() -> None:
+    """CuPy 編譯 kernel 用包進來、與 NVRTC 同版的 CUDA 標頭檔，不用使用者自己裝的 CUDA Toolkit（見 build_exe.py）。
+    只影響這個程式與它開的子行程。"""
+    import os
+
+    cuda = os.path.join(getattr(sys, "_MEIPASS", ""), "nvidia", "cuda_runtime")
+    if getattr(sys, "frozen", False) and os.path.isfile(os.path.join(cuda, "include", "cuda_fp8.h")):
+        os.environ["CUDA_PATH"] = cuda
+        os.environ.pop("CUDA_HOME", None)
+
+
 def smoke_test(folder: str, out: str, expect_gpu: bool) -> int:
     import os
     import traceback
@@ -93,6 +104,7 @@ def smoke_test(folder: str, out: str, expect_gpu: bool) -> int:
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    use_bundled_cuda_headers()
     if len(sys.argv) >= 4 and sys.argv[1] == "--smoke-test":
         sys.exit(smoke_test(sys.argv[2], sys.argv[3], "--expect-gpu" in sys.argv[4:]))
     from apu_astro.app import main

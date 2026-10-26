@@ -107,6 +107,9 @@ def build() -> Path:
                 rel = dll.parent.relative_to(base.parent)
                 args += ["--add-binary", f"{dll}{os.pathsep}{rel.as_posix()}"]
         args += ["--copy-metadata", f"nvidia-{lib.replace('_', '-')}-cu12"]
+    # CuPy 用 NVRTC 編譯 kernel 要 CUDA 標頭檔，且必須與 NVRTC 同版。沒包的話會用使用者自己裝的 CUDA Toolkit，
+    # 比 NVRTC 舊就編譯失敗（2026-10-26：__nv_fp8_e8m0 incomplete type）。gui_entry.py 會把 CUDA_PATH 指過來
+    args += ["--add-data", f"{base / 'cuda_runtime' / 'include'}{os.pathsep}nvidia/cuda_runtime/include"]
     for mod in EXCLUDES + QT_EXCLUDES:
         args += ["--exclude-module", mod]
     PyInstaller.__main__.run(args)
