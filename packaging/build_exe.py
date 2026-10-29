@@ -1,13 +1,15 @@
-"""在這台 Windows 機打包整合版（只在本機用，不發布）。
+"""打包整合版：Windows 在這台機器，macOS 在 GitHub Actions（.github/workflows/macos.yml；PyInstaller 不能跨平台）。
 
     .venv\\Scripts\\python packaging\\build_exe.py [--dist 資料夾]
 
-→ dist/APUAstro/APUAstro.exe 與 dist/APUAstro-<版本>-win64.zip
+→ Windows：dist/APUAstro/APUAstro.exe 與 dist/APUAstro-<版本>-win64.zip
+→ macOS：dist/APUAstro.app 與 dist/APUAstro-<版本>-macos-<arm64|x86_64>.zip
 
 - 三個原本的專案用 editable 安裝的本機 repo（見 README）；打包前檢查版本：Photons 要 0.2 以上
   （整合版用 0.2 才有的「加入檔案」），版本不對就停下來，免得打包到另一個分支的程式。
-- GPU：跟 APU Photons 一樣包進 CuPy 與 CUDA runtime／NVRTC，有 NVIDIA 顯示卡就用、沒有就用 CPU；
+- GPU（只有 Windows）：跟 APU Photons 一樣包進 CuPy 與 CUDA runtime／NVRTC，有 NVIDIA 顯示卡就用、沒有就用 CPU；
   用不到的 cuBLAS、cuFFT… 打包後刪掉（省 1.8 GB），由冒煙測試確認 GPU 疊圖仍正常。
+  macOS 沒有 CUDA：疊圖用 CPU，AI 降噪用 onnxruntime 的 CPU（不包 CuPy）。
 - 不包 tkinter、matplotlib（整合版的介面是 Qt，執行時不會載入它們）。
 - 打包完用合成星場實際跑一次打包好的程式（視窗、挑片多行程量測、CPU／GPU 疊圖、後製），都正常才算成功。
 - 舊的 dist/APUAstro 正在執行（開著 APUAstro.exe）時先停下來：PyInstaller 會先刪舊資料夾，刪到一半遇到鎖住的檔案才失敗，
@@ -20,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -32,6 +36,7 @@ sys.path[:0] = [str(ROOT / "src")]
 from apu_astro import __version__  # noqa: E402
 
 NAME = "APUAstro"
+MAC = sys.platform == "darwin"
 DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 EXCLUDES = ["pytest", "IPython", "PyQt5", "PyQt6", "PySide2", "notebook", "sphinx", "matplotlib", "tkinter",
@@ -61,8 +66,7 @@ def check_versions() -> None:
              "APU Processing": apu_processing.__version__}
     print("打包的版本：" + "、".join(f"{k} {v}" for k, v in found.items()))
     if major_minor(apu_photons.__version__) < (0, 2):
-        raise SystemExit(f"APU Photons 是 {apu_photons.__version__}，整合版要 0.2 以上："
-                         "請先把 ApuPhotonsUtility 切到 v0.2 分支")
+        raise SystemExit(f"APU Photons 是 {apu_photons.__version__}，整合版要 0.2 以上：請先更新 ApuPhotonsUtility")
 
 
 def ensure_not_running(bundle: Path) -> None:
@@ -78,7 +82,6 @@ def ensure_not_running(bundle: Path) -> None:
 
 
 def build() -> Path:
-    import nvidia
     import PyInstaller.__main__
 
     assets = ROOT / "src" / "apu_astro" / "assets"
@@ -93,13 +96,43 @@ def build() -> Path:
         "--collect-all", "onnxruntime",
         "--hidden-import", "lz4.block", "--hidden-import", "zstandard",
         "--copy-metadata", "photutils",
-        "--collect-all", "cupy", "--collect-all", "cupyx", "--collect-all", "cupy_backends",
-        "--collect-all", "cuda_pathfinder", "--hidden-import", "graphlib", "--copy-metadata", "cupy-cuda12x",
         "--distpath", str(DIST), "--workpath", str(BUILD), "--specpath", str(BUILD),
     ]
-    icon = assets / "app.ico"
+    # macOS 的圖示用 PNG（PyInstaller 用 Pillow 轉成 .icns）
+    icon = assets / ("icon_256.png" if MAC else "app.ico")
     if icon.is_file():
         args += ["--icon", str(icon)]
+    if MAC:
+        args += ["--osx-bundle-identifier", "io.github.apuhuang.apuastro"]
+        for mod in ("cupy", "cupyx", "cupy_backends", "cuda_pathfinder", "nvidia", "fastrlock"):
+            args += ["--exclude-module", mod]
+    else:
+        args += gpu_args()
+    for mod in EXCLUDES + QT_EXCLUDES:
+        args += ["--exclude-module", mod]
+    PyInstaller.__main__.run(args)
+    if MAC:
+        app = DIST / f"{NAME}.app"
+        info = app / "Contents" / "Info.plist"
+        with info.open("rb") as f:
+            plist = plistlib.load(f)
+        plist.update(CFBundleName="APU Astro", CFBundleDisplayName="APU Astro",
+                     CFBundleShortVersionString=__version__, CFBundleVersion=__version__)
+        with info.open("wb") as f:
+            plistlib.dump(plist, f)
+        # 改了 Info.plist 要重新簽（ad-hoc）；Apple 晶片上沒有簽章的程式根本不能執行
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
+        return app / "Contents" / "MacOS" / NAME
+    prune_cuda(DIST / NAME)
+    return DIST / NAME / f"{NAME}.exe"
+
+
+def gpu_args() -> list[str]:
+    """Windows 的 GPU：CuPy、CUDA runtime／NVRTC 的 DLL 和標頭檔。"""
+    import nvidia
+
+    args = ["--collect-all", "cupy", "--collect-all", "cupyx", "--collect-all", "cupy_backends",
+            "--collect-all", "cuda_pathfinder", "--hidden-import", "graphlib", "--copy-metadata", "cupy-cuda12x"]
     base = Path(list(nvidia.__path__)[0])
     for lib in GPU_CUDA_LIBS:
         for dll in (base / lib).rglob("*"):
@@ -110,11 +143,7 @@ def build() -> Path:
     # CuPy 用 NVRTC 編譯 kernel 要 CUDA 標頭檔，且必須與 NVRTC 同版。沒包的話會用使用者自己裝的 CUDA Toolkit，
     # 比 NVRTC 舊就編譯失敗（2026-10-26：__nv_fp8_e8m0 incomplete type）。gui_entry.py 會把 CUDA_PATH 指過來
     args += ["--add-data", f"{base / 'cuda_runtime' / 'include'}{os.pathsep}nvidia/cuda_runtime/include"]
-    for mod in EXCLUDES + QT_EXCLUDES:
-        args += ["--exclude-module", mod]
-    PyInstaller.__main__.run(args)
-    prune_cuda(DIST / NAME)
-    return DIST / NAME / f"{NAME}.exe"
+    return args
 
 
 def prune_cuda(bundle: Path) -> None:
@@ -141,7 +170,8 @@ def smoke_test(exe: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         light = make_lights(Path(tmp))
         out = Path(tmp) / "smoke.txt"
-        proc = subprocess.run([str(exe), "--smoke-test", str(light), str(out), "--expect-gpu"], timeout=1200)
+        cmd = [str(exe), "--smoke-test", str(light), str(out)] + ([] if MAC else ["--expect-gpu"])
+        proc = subprocess.run(cmd, timeout=1800)
         text = out.read_text(encoding="utf-8") if out.exists() else "(沒有輸出)"
         if proc.returncode != 0 or not text.startswith("ok "):
             raise SystemExit(f"打包好的程式測試失敗（exit {proc.returncode}）：\n{text}")
@@ -149,15 +179,21 @@ def smoke_test(exe: Path) -> None:
 
 
 def archive() -> Path:
-    zip_base = DIST / f"{NAME}-{__version__}-win64"
-    path = Path(shutil.make_archive(str(zip_base), "zip", DIST, NAME))
+    if MAC:
+        # ditto 保留 .app 裡的符號連結、執行權限和簽章（shutil 的 zip 會弄壞）
+        path = DIST / f"{NAME}-{__version__}-macos-{platform.machine()}.zip"
+        subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(DIST / f"{NAME}.app"), str(path)],
+                       check=True)
+    else:
+        zip_base = DIST / f"{NAME}-{__version__}-win64"
+        path = Path(shutil.make_archive(str(zip_base), "zip", DIST, NAME))
     print(f"壓縮檔：{path}（{path.stat().st_size / 2**20:.0f} MB）")
     return path
 
 
 def main() -> int:
-    if sys.platform != "win32":
-        raise SystemExit("整合版只在 Windows 機打包")
+    if sys.platform not in ("win32", "darwin"):
+        raise SystemExit("整合版只打包 Windows 和 macOS 版")
     for stream in (sys.stdout, sys.stderr):  # 輸出導到檔案時預設是 Big5，中文訊息會變亂碼
         stream.reconfigure(encoding="utf-8")
     global DIST
@@ -165,7 +201,7 @@ def main() -> int:
     ap.add_argument("--dist", type=Path, default=DIST)
     DIST = ap.parse_args().dist.resolve()
     check_versions()
-    ensure_not_running(DIST / NAME)
+    ensure_not_running(DIST / (f"{NAME}.app" if MAC else NAME))
     exe = build()
     smoke_test(exe)
     archive()

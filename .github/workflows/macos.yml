@@ -1,0 +1,73 @@
+# macOS 版：用 GitHub 的 Mac 主機打包（PyInstaller 不能跨平台，Windows 版在作者的 Windows 機打包）。
+# Apple 晶片（arm64）和 Intel（x86_64）各打包一次：裝三個專案的公開版本 → 跑測試 → 打包 → 冒煙測試 → zip。
+# 手動執行（Actions 頁面的 Run workflow，或 gh workflow run macos.yml）；填了 release 就把 zip 加到那個 Release。
+
+name: macOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "要加到哪個 Release（例如 v0.1.5）；留空只打包、不上傳"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]   # Apple 晶片、Intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: apu-astro-studio
+      # 三個專案用打過標籤的公開版本（跟 Windows 版打包時用的一樣）
+      - uses: actions/checkout@v4
+        with:
+          repository: ApuHuang/apu-pick
+          ref: v0.7.0
+          path: astro-light-selector
+      - uses: actions/checkout@v4
+        with:
+          repository: ApuHuang/apu-photons
+          ref: v0.2.1
+          path: ApuPhotonsUtility
+      - uses: actions/checkout@v4
+        with:
+          repository: ApuHuang/apu-processing
+          ref: v0.2.1
+          path: apu-processing
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安裝
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6 pyqtgraph pytest pyinstaller matplotlib onnxruntime
+          python -m pip install -e ./astro-light-selector -e ./ApuPhotonsUtility -e ./apu-processing
+          python -m pip install -e ./apu-astro-studio --no-deps
+          python -c "import platform, PySide6, onnxruntime; print(platform.machine(), PySide6.__version__, onnxruntime.__version__)"
+      - name: 測試
+        working-directory: apu-astro-studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+      - name: 打包（含冒煙測試）
+        working-directory: apu-astro-studio
+        run: python packaging/build_exe.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: APUAstro-${{ matrix.runner }}
+          path: apu-astro-studio/dist/*.zip
+      - name: 加到 Release
+        if: inputs.release != ''
+        working-directory: apu-astro-studio
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release }}" dist/*.zip --clobber
