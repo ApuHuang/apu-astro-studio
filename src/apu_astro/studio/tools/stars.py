@@ -350,7 +350,7 @@ def detect_stars(L: np.ndarray, threshold: float):
     lab, n = ndimage.label(cand)
     if n == 0:
         z = np.zeros(0)
-        return pdetail.Stars(z, z, z, np.zeros(0, bool), np.zeros((h, w), bool), np.zeros((h, w), np.float32), sig)
+        return pdetail.Stars(z, z, z, np.zeros(0, bool), np.zeros((h, w), bool), np.zeros((h, w), np.float32))
     py, px = np.nonzero(cand)
     li = lab[py, px]
     area = np.bincount(li, minlength=n + 1)[1:]
@@ -368,7 +368,9 @@ def detect_stars(L: np.ndarray, threshold: float):
     sat = (peak >= 0.97 * float(L.max())) & (flat >= 5)
     keep_lab = np.concatenate([[False], ok])
     mask = keep_lab[lab]
-    return pdetail.Stars(ys[ok], xs[ok], np.sqrt(area[ok] / np.pi), sat[ok], mask, mask.astype(np.float32), sig)
+    # 只給 Processing 0.2.1 就有的 6 個欄位（以前多傳了噪聲，那是 Processing 還沒發布的分支才有的欄位，
+    # 用公開的 0.2.1 會在這裡出錯；整合版沒有讀它）
+    return pdetail.Stars(ys[ok], xs[ok], np.sqrt(area[ok] / np.pi), sat[ok], mask, mask.astype(np.float32))
 
 
 def _discs(shape: tuple[int, int], ys: np.ndarray, xs: np.ndarray, radii: np.ndarray) -> np.ndarray:
