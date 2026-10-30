@@ -96,6 +96,9 @@ def build() -> Path:
         "--collect-all", "onnxruntime",
         "--hidden-import", "lz4.block", "--hidden-import", "zstandard",
         "--copy-metadata", "photutils",
+        # astropy／photutils 載入時用 importlib.metadata 查 scipy、numpy 的版本：沒包 metadata 的話疊圖頁一開就
+        # PackageNotFoundError（macOS 第一次打包；APU Photons 自己打包也遇過，3f5428d）
+        "--copy-metadata", "scipy", "--copy-metadata", "numpy",
         "--distpath", str(DIST), "--workpath", str(BUILD), "--specpath", str(BUILD),
     ]
     # macOS 的圖示用 PNG（PyInstaller 用 Pillow 轉成 .icns）
