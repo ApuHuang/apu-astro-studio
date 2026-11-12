@@ -84,6 +84,9 @@ def _moments(cut: np.ndarray, sigma_w: float) -> np.ndarray | None:
     cov_w = np.eye(2) * sigma_w ** 2
     m = None
     for _ in range(5):
+        # 光全在一列或一個像素上（熱點、壞行）：矩是奇異的，不是星
+        if not np.isfinite(cov_w).all() or np.linalg.det(cov_w) <= 1e-9:
+            return None
         inv = np.linalg.inv(cov_w)
         dy, dx = yy - cy, xx - cx
         w = np.exp(-0.5 * (inv[0, 0] * dx * dx + 2 * inv[0, 1] * dx * dy + inv[1, 1] * dy * dy))

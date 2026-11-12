@@ -61,6 +61,10 @@ _ZH = {
     "close.confirm": "{steps}還在進行，確定要關閉嗎？",
     "close.sep": "、",
     "no_project": "尚未開啟",
+    "update.badge": "↓ 新版 v{version}",
+    "update.help": "有新版本 {version}（目前是 {current}）。按一下用瀏覽器下載：{file}\n"
+                   "只會連到 GitHub 查版本，一天最多一次。",
+    "update.page": "下載頁面",
     "view.compare": "對照",
     "view.compare.help": "左邊原圖、右邊目前結果，拖曳中間的線比較",
     "compare.left": "原圖",
@@ -111,6 +115,10 @@ _EN = {
     "close.confirm": "{steps} still running. Close anyway?",
     "close.sep": ", ",
     "no_project": "Nothing open",
+    "update.badge": "↓ New v{version}",
+    "update.help": "Version {version} is available (you have {current}). Click to download it in your browser: {file}\n"
+                   "Only GitHub is contacted, at most once a day.",
+    "update.page": "download page",
     "view.compare": "Compare",
     "view.compare.help": "Original on the left, current result on the right; drag the line to compare",
     "compare.left": "Original",

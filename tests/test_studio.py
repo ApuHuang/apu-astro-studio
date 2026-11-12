@@ -374,6 +374,16 @@ def test_psf_measure_and_saturation():
     assert m.any() and m.mean() < 0.05
 
 
+def test_psf_moments_reject_hot_pixel():
+    """光全在一個像素或一列上（熱點、壞行）：不是星，回傳 None；以前矩陣不能反轉、整個開檔失敗（M42 6 張的疊圖）。"""
+    from apu_astro.studio import psf
+    cut = np.zeros((13, 13))
+    cut[6, 6] = 1.0
+    assert psf._moments(cut, 1.0) is None
+    cut[6, :] = 1.0
+    assert psf._moments(cut, 1.0) is None
+
+
 def test_channel_alignment_fixes_offset():
     from apu_astro.studio import psf
     img = _elliptical_field(cov=((2.5, 0.0), (0.0, 2.5)), shift_r=(0.4, 0.6))

@@ -8,18 +8,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QCloseEvent, QKeySequence, QPainter, QPaintEvent, QShortcut
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, QRectF, Qt, QUrl, Signal
+from PySide6.QtGui import (QAction, QColor, QCloseEvent, QDesktopServices, QKeySequence, QPainter, QPaintEvent,
+                           QShortcut)
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMainWindow, QProgressBar,
                                QStackedWidget, QVBoxLayout, QWidget)
 
-from . import __version__, icons
+from . import __version__, icons, update
 from .i18n import APP_NAME, get_language, set_language, tr
 from .pages.base import Page
 from .settings import load_settings, save_settings
 from .theme import D, dark_title_bar, fonts
 from .ui.var import Var
 from .ui.widgets import Badge, Segmented, ask_yes_no, label
+from .ui.worker import Bridge, run_thread
 
 STEPS = ("pick", "stack", "process")
 
@@ -264,6 +266,14 @@ class MainWindow(QMainWindow):
         name = label(APP_NAME, D.label, 11, bold=True)
         h.addWidget(name)
         h.addWidget(Badge(f"v{__version__}"), 0, Qt.AlignmentFlag.AlignVCenter)
+        # 有新版才出現：版號旁邊藍色的小框，按一下用瀏覽器下載
+        self.update_info: update.Update | None = None
+        self.update_badge = Badge("", D.accent)
+        self.update_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_badge.mousePressEvent = lambda _e: self.open_update()
+        self.update_badge.hide()
+        h.addWidget(self.update_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._update_bridge = Bridge(self._update_fetched, self)
         h.addStretch(1)
         self.title_icon = QLabel()
         self.title_icon.setPixmap(icons.pixmap("folder", D.secondary, 15))
@@ -382,10 +392,51 @@ class MainWindow(QMainWindow):
         set_language(lang)
         save_settings(language=lang)
         self.rail.retranslate()
+        self._show_update(self.update_info)
         for page in self.pages.values():
             page.rebuild()
         self._update_title()
         self.status_bar.show_page(self.current_page())
+
+    # ------------------------------------------------------------------ 新版本
+
+    def check_for_updates(self) -> None:
+        """有沒有新版：先用上次查到的結果顯示，一天沒查過才在背景連 GitHub（沒網路就算了）。
+        app.main() 開窗後呼叫（測試直接建 MainWindow，不會連網）。"""
+        st = load_settings()
+        if not update.enabled(st):
+            self._show_update(None)
+            return
+        self._show_update(update.newer(update.cached(st)))
+        if update.due(st):
+            post = self._update_bridge.post
+
+            def work() -> None:
+                try:
+                    post(("update", update.fetch_latest()))
+                except Exception:  # noqa: BLE001  沒網路、被擋、格式不對：不打擾使用者
+                    pass
+
+            run_thread(work, "apu-astro-update")
+
+    def _update_fetched(self, event: tuple) -> None:
+        update.remember(event[1])
+        if update.enabled():
+            self._show_update(update.newer(event[1]))
+
+    def _show_update(self, info: update.Update | None) -> None:
+        self.update_info = info
+        if info is None:
+            self.update_badge.hide()
+            return
+        self.update_badge.setText(tr("update.badge", version=info.version))
+        self.update_badge.setToolTip(tr("update.help", version=info.version, current=__version__,
+                                        file=info.file or tr("update.page")))
+        self.update_badge.show()
+
+    def open_update(self) -> None:
+        if self.update_info is not None:
+            QDesktopServices.openUrl(QUrl(self.update_info.url))
 
     # ------------------------------------------------------------------ 拖放、關閉
 

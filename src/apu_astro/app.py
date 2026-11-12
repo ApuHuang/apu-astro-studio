@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         win.showMaximized()
     else:
         win.show()
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(1500, win.check_for_updates)
     return app.exec()
 
 
