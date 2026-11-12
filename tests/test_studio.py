@@ -330,6 +330,17 @@ def test_denoise_does_not_change_stretch_strength():
     assert abs(medians[0][0] - medians[1][0]) < 0.03 and abs(medians[0][1] - medians[1][1]) < 0.05
 
 
+def test_denoise_keeps_measured_per_scale_noise(monkeypatch):
+    """降噪固定用「每個尺度直接量、逐係數收縮」：Processing 0.2.2 起的預設（從 2 px 推算）接在 AI 降噪後面會留色斑。"""
+    from apu_astro.studio.tools import noise
+    seen = []
+    real = noise.pdenoise.reduce
+    monkeypatch.setattr(noise.pdenoise, "reduce", lambda img, s, cancel: seen.append(s) or real(img, s, cancel))
+    get("denoise").apply(_star_field(), {"amount": 0.5}, Ctx(1.0), True)
+    s = seen[0]
+    assert getattr(s, "scale_noise", "measured") == "measured" and getattr(s, "shrink", "coefficient") == "coefficient"
+
+
 def _elliptical_field(h=600, w=800, cov=((4.0, 1.2), (1.2, 2.6)), shift_r=(0.0, 0.0), sat_level=None, seed=1,
                       noise=0.0015):
     """合成星場：橢圓高斯星點（共變異數 cov，x/y 順序）；紅色版可以整體位移；可以把亮星截平成飽和。"""

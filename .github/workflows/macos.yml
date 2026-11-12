@@ -31,17 +31,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ApuHuang/apu-pick
-          ref: v0.7.0
+          ref: v0.8.0
           path: astro-light-selector
       - uses: actions/checkout@v4
         with:
           repository: ApuHuang/apu-photons
-          ref: v0.2.1
+          ref: v0.2.2
           path: ApuPhotonsUtility
       - uses: actions/checkout@v4
         with:
           repository: ApuHuang/apu-processing
-          ref: v0.2.1
+          ref: v0.2.3
           path: apu-processing
       - uses: actions/setup-python@v5
         with:

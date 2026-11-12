@@ -41,7 +41,8 @@ class Denoise(Tool):
         if amount <= 0:
             return img
         base = pdenoise.DenoiseSettings()
-        s = replace(base, amount=amount,
+        keep = {k: v for k, v in LEGACY.items() if hasattr(base, k)}   # 0.2.1 以前沒有這些欄位
+        s = replace(base, amount=amount, **keep,
                     k_luminance=tuple(k * float(params.get("luminance", 1.0)) for k in base.k_luminance),
                     k_chroma=tuple(k * float(params.get("chroma", 1.0)) for k in base.k_chroma))
         src = img[0] if img.shape[0] == 1 else img
@@ -50,7 +51,13 @@ class Denoise(Tool):
         return _limit_change(img, out, ctx.scale)
 
 
-CHANGE_LIMIT = 4.0   # 降噪每個像素最多改幾倍當地噪聲（見 _limit_change）
+# Processing 0.2.2 起降噪的預設改了（大尺度噪聲從 2 px 推算、亮度看周圍 3×3 的能量）：那是給還沒降噪的疊圖訂的。
+# 這裡的降噪接在 AI 降噪後面，剩下的噪聲多半是 3 px 以上的，用推算的會低估 → 色斑留下來
+# （LBN576 中央預覽區，成品無星圖 3～24 px 的色差起伏 0.0071 → 0.0099，放大看一塊塊綠紫色）。
+# 所以固定用 0.2.1 的做法：每個尺度直接量、逐係數收縮（跟 0.1.5 的畫面一樣）。
+LEGACY = {"scale_noise": "measured", "shrink": "coefficient"}
+
+CHANGE_LIMIT = 4.0  # 降噪每個像素最多改幾倍當地噪聲（見 _limit_change）
 
 
 def _limit_change(before: np.ndarray, after: np.ndarray, scale: float) -> np.ndarray:

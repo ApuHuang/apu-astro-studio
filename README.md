@@ -1,6 +1,6 @@
 # APU Astro
 
-挑片 → 疊圖 → 後製，一套做完的天文攝影軟體（Windows）。
+挑片 → 疊圖 → 後製，一套做完的天文攝影軟體（Windows、macOS）。
 
 [APU Pick](https://github.com/ApuHuang/apu-pick)（挑片）、[APU Photons](https://github.com/ApuHuang/apu-photons)（疊圖）、
 [APU Processing](https://github.com/ApuHuang/apu-processing)（後製）的整合版：挑片、疊圖直接用這兩套的核心，
@@ -34,13 +34,21 @@
 
 ## 下載
 
-到 [Releases 頁面](../../releases/latest) 下載 `APUAstro-版本-win64.zip`（Windows 10 / 11，64 位元），不用另外安裝 Python。
+到 [Releases 頁面](../../releases/latest) 下載，不用另外安裝 Python：
 
-在 zip 上按右鍵 →「全部解壓縮」，雙擊 `APUAstro.exe`。出現「Windows 已保護您的電腦」時，按「其他資訊」→「仍要執行」
+- Windows 10 / 11（64 位元）：`APUAstro-版本-win64.zip`
+- Mac（Apple 晶片，M1 以後）：`APUAstro-版本-macos-arm64.zip`
+- Mac（Intel）：`APUAstro-版本-macos-x86_64.zip`
+
+**Windows**：在 zip 上按右鍵 →「全部解壓縮」，雙擊 `APUAstro.exe`。出現「Windows 已保護您的電腦」時，按「其他資訊」→「仍要執行」
 （程式沒有購買數位簽章）。
 
 有 NVIDIA 顯示卡時疊圖與後製會用它加速，GPU 需要的檔案程式都帶了，不用另外安裝 CUDA，電腦上裝的 CUDA 版本也不影響；
 AI 降噪可以用任何支援 DirectX 12 的顯示卡。沒有獨立顯示卡也能用，只是比較慢。
+
+**Mac**：解壓縮後把 `APUAstro.app` 拖到「應用程式」。程式沒有購買 Apple 的開發者簽章，第一次打開會被擋下來：
+到「系統設定 → 隱私權與安全性」，往下找到 APUAstro 那一行按「強制打開」。
+Mac 版沒有顯示卡加速（疊圖、後製、AI 降噪都用 CPU），功能一樣、速度比有 NVIDIA 顯示卡的 Windows 慢。
 
 ## 使用方式
 
