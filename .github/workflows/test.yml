@@ -1,0 +1,60 @@
+# 每次推到 master、每個 PR 都跑測試（Windows 與 macOS）。雲端主機沒有顯示卡：疊圖、後製、AI 降噪都走 CPU。
+# 三個專案用打過標籤的公開版本，跟 macos.yml 一樣；要換對接的版本時兩邊一起改。
+
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: apu-astro-studio
+      - uses: actions/checkout@v4
+        with:
+          repository: ApuHuang/apu-pick
+          ref: v0.9.0
+          path: astro-light-selector
+      - uses: actions/checkout@v4
+        with:
+          repository: ApuHuang/apu-photons
+          ref: v0.3.0
+          path: ApuPhotonsUtility
+      - uses: actions/checkout@v4
+        with:
+          repository: ApuHuang/apu-processing
+          ref: v0.2.3
+          path: apu-processing
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安裝
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          C=apu-astro-studio/packaging/constraints.txt
+          python -m pip install -c $C PySide6 pyqtgraph pytest onnxruntime lz4 zstandard
+          python -m pip install -c $C -e ./astro-light-selector -e ./ApuPhotonsUtility -e ./apu-processing
+          python -m pip install -c $C -e ./apu-astro-studio --no-deps
+      - name: 測試
+        working-directory: apu-astro-studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q

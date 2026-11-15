@@ -31,12 +31,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ApuHuang/apu-pick
-          ref: v0.8.0
+          ref: v0.9.0
           path: astro-light-selector
       - uses: actions/checkout@v4
         with:
           repository: ApuHuang/apu-photons
-          ref: v0.2.2
+          ref: v0.3.0
           path: ApuPhotonsUtility
       - uses: actions/checkout@v4
         with:
@@ -49,9 +49,11 @@ jobs:
       - name: 安裝
         run: |
           python -m pip install --upgrade pip
-          python -m pip install PySide6 pyqtgraph pytest pyinstaller matplotlib onnxruntime lz4 zstandard
-          python -m pip install -e ./astro-light-selector -e ./ApuPhotonsUtility -e ./apu-processing
-          python -m pip install -e ./apu-astro-studio --no-deps
+          # 版本照 packaging/constraints.txt（Windows 開發機測過的），不然會裝到當天最新的
+          C=apu-astro-studio/packaging/constraints.txt
+          python -m pip install -c $C PySide6 pyqtgraph pytest pyinstaller matplotlib onnxruntime lz4 zstandard
+          python -m pip install -c $C -e ./astro-light-selector -e ./ApuPhotonsUtility -e ./apu-processing
+          python -m pip install -c $C -e ./apu-astro-studio --no-deps
           python -c "import platform, PySide6, onnxruntime; print(platform.machine(), PySide6.__version__, onnxruntime.__version__)"
       - name: 測試
         working-directory: apu-astro-studio

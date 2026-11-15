@@ -1,8 +1,8 @@
 """挑片（APU Pick 的核心）：開資料夾 → 量測 → 調門檻（即時更新）→ 搬移淘汰片／全部還原 → 送去疊圖。
 
-流程、判斷、報表與 APU Pick 0.5 完全相同（直接呼叫 astro_light_selector），介面換成 Qt；
-另外做了 0.6 規劃的幾項：滑桿數字可以直接輸入、清單用鍵盤快速挑片（K 保留、X 淘汰、A 改回自動）、
-保留片的總曝光、趨勢圖點一下跳到那一張。
+流程、判斷、報表與 APU Pick 完全相同（直接呼叫 astro_light_selector，目前對接 0.9），介面換成 Qt：
+滑桿數字可以直接輸入、清單用鍵盤快速挑片（K 保留、X 淘汰、A 改回自動）、保留片的總曝光、趨勢圖點一下跳到那一張、
+整理檔案（0.6）、清單右邊的資訊與直方圖（0.7）、像場（0.8／0.9，圖在 pick_detail.py）、停止後保留已量的、只量新檔案（0.9）。
 """
 
 from __future__ import annotations
@@ -16,11 +16,14 @@ from pathlib import Path
 
 import numpy as np
 from astro_light_selector import settings as pick_settings
+from astro_light_selector.field import analyze_frame, combine
 from astro_light_selector.grouping import EXPOSURE_TOLERANCE
 from astro_light_selector.i18n import tr as ptr
 from astro_light_selector.i18n import tr_metric
 from astro_light_selector.metrics import FrameMetrics, is_image
 from astro_light_selector.mover import read_move_log
+from astro_light_selector.organize import (DEFAULT_ORGANIZE_KEYS, ORGANIZE_KEYS, organize, pending_undo, plan_organize,
+                                           undo_organize)
 from astro_light_selector.pipeline import (REJECT_DIR_NAME, REPORT_NAME, Cancelled, Selection, collect_files, decide,
                                            frame_key, measure_files, move_files, restore_files, should_recurse)
 from astro_light_selector.preview import Preview, closeup, make_preview, thumbnail
@@ -31,7 +34,8 @@ from PIL import Image
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QImage, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QMenu,
-                               QPlainTextEdit, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QPlainTextEdit, QStackedWidget, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
+                               QWidget)
 
 from ..i18n import tr
 from ..theme import D, fonts
@@ -58,6 +62,8 @@ COLUMNS = [
     ("reason", "gui.col.reason", 360, Qt.AlignmentFlag.AlignLeft),
 ]
 WATCH_INTERVAL_MS = 10_000
+PANES = ("preview", "info", "hist", "field")   # 清單右邊的四頁
+FIELD_AVERAGE_FRAMES = 5                        # 像場「平均」用分數最高的幾張保留片（同 Pick）
 
 
 def default_workers() -> int:
@@ -142,17 +148,39 @@ class PickPage(Page):
         self.bridge = Bridge(self._handle, self)
 
         self.view = Var("plot")
-        self.method = Var("auto")
-        self.pass_line = Var(80.0)
-        self.min_score = Var(85.0)
-        self.keep_best = Var(70.0)
-        self.grouping = {k: Var(v) for k, v in (("filter", True), ("exposure", True), ("gain", True),
-                                              ("night", False), ("folder", False))}
+        # 門檻方式與數值、分組開關：記住上次用的（跟 Pick 0.9 獨立版共用設定檔的 threshold、group_keys）
+        th = st.get("threshold") if isinstance(st.get("threshold"), dict) else {}
+
+        def number(key: str, default: float, low: float, high: float) -> float:
+            try:
+                v = float(th.get(key, default))
+            except (TypeError, ValueError):
+                return default
+            return v if low <= v <= high else default
+
+        self.method = Var(th.get("method") if th.get("method") in ("auto", "min_score", "keep_best") else "auto")
+        self.pass_line = Var(number("pass", 80.0, 50, 100))
+        self.min_score = Var(number("min_score", 85.0, 0, 100))
+        self.keep_best = Var(number("keep_best", 70.0, 10, 100))
+        keys = st.get("group_keys")
+        keys = keys if isinstance(keys, list) else ["filter", "exposure", "gain"]
+        self.grouping = {k: Var(k in keys) for k in ("filter", "exposure", "gain", "night", "folder")}
         self.recursive = Var(False)
         self.exposure_tol = Var(float(st.get("exposure_tolerance", EXPOSURE_TOLERANCE)))
         self.workers = Var(default_workers())
         self.watch = Var(False)
         self.only_reject = Var(False)
+        # 清單右邊看哪一頁、直方圖與像場的選項、整理檔案依哪些參數：跟 Pick 獨立版共用設定
+        choice = lambda key, options, default: st.get(key) if st.get(key) in options else default  # noqa: E731
+        self.pane = Var(choice("preview_pane", PANES, "preview"))
+        self.hist_stretch = Var(choice("hist_stretch", ("stretched", "linear"), "stretched"))
+        self.hist_channels = Var(choice("hist_channels", ("rgb", "lum"), "rgb"))
+        self.field_mode = Var(choice("field_mode", ("single", "average"), "single"))
+        self.field_view = Var(choice("field_view", ("grid", "quad"), "grid"))
+        organize_keys = st.get("organize_keys") if isinstance(st.get("organize_keys"), list) else DEFAULT_ORGANIZE_KEYS
+        self.organize_by = {k: Var(k in organize_keys) for k in ORGANIZE_KEYS}
+        self._field_cache: dict[str, object] = {}     # 像場量測結果（FieldResult）或失敗訊息（str）
+        self._field_running: set[str] = set()
         saved = st.get("weights") or {}
         self.weights = {m: Var(float(saved.get(m, DEFAULT_WEIGHTS[m] * 100))) for m in METRICS}
 
@@ -168,6 +196,17 @@ class PickPage(Page):
         self.only_reject.subscribe(lambda _v: self._fill_table())
         self.watch.subscribe(lambda _v: self._toggle_watch())
         self.view.subscribe(lambda v: self.views.show_key(v) if hasattr(self, "views") else None)
+        self.pane.subscribe(lambda v: (pick_settings.save_settings(preview_pane=v), self._show_pane()))
+        for var in (self.hist_stretch, self.hist_channels):
+            var.subscribe(lambda _v: (pick_settings.save_settings(hist_stretch=self.hist_stretch.get(),
+                                                                  hist_channels=self.hist_channels.get()),
+                                      self._refresh_detail()))
+        for var in (self.field_mode, self.field_view):
+            var.subscribe(lambda _v: (pick_settings.save_settings(field_mode=self.field_mode.get(),
+                                                                  field_view=self.field_view.get()),
+                                      self._refresh_detail()))
+        for var in self.organize_by.values():
+            var.subscribe(lambda _v: pick_settings.save_settings(organize_keys=list(self._organize_keys())))
         self._status_fn = lambda: ptr("gui.status.start")
         self._setting_folder = False
 
@@ -247,11 +286,82 @@ class PickPage(Page):
         return w
 
     def _build_preview_pane(self) -> QWidget:
+        """清單右邊：預覽／資訊／直方圖／像場四頁（Pick 0.6～0.9），看選到的那一張。"""
+        outer = QWidget()
+        outer.setFixedWidth(430)
+        outer.setStyleSheet(f"background: {D.list_bg}; border-left: 1px solid {D.separator};")
+        ov = QVBoxLayout(outer)
+        ov.setContentsMargins(0, 8, 0, 0)
+        ov.setSpacing(6)
+        head = QHBoxLayout()
+        head.setContentsMargins(12, 0, 12, 0)
+        head.addWidget(Segmented([(k, ptr(f"gui.pane.{k}")) for k in PANES], self.pane, stretch=True))
+        ov.addLayout(head)
+        self.panes = QStackedWidget()
+        self.panes.setStyleSheet("border: none;")
+        ov.addWidget(self.panes, 1)
+        self.panes.addWidget(self._build_preview_page())
+        self.panes.addWidget(self._build_info_page())
+        self.panes.addWidget(self._build_hist_page())
+        self.panes.addWidget(self._build_field_page())
+        self._show_pane()
+        return outer
+
+    @staticmethod
+    def _text_box(height: int | None = None) -> QTextEdit:
+        box = QTextEdit()
+        box.setReadOnly(True)
+        box.setFont(fonts().ui(9))
+        box.setStyleSheet(f"background: {D.list_bg}; border: none; padding: 2px 12px;")
+        if height:
+            box.setFixedHeight(height)
+        return box
+
+    def _build_info_page(self) -> QWidget:
+        self.info_text = self._text_box()
+        return self.info_text
+
+    def _build_hist_page(self) -> QWidget:
+        from .pick_detail import HistogramView
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 6)
+        row = QHBoxLayout()
+        row.setContentsMargins(12, 0, 12, 0)
+        row.addWidget(Segmented([("stretched", ptr("gui.hist.stretched")), ("linear", ptr("gui.hist.linear"))],
+                                self.hist_stretch))
+        row.addStretch(1)
+        row.addWidget(Segmented([("rgb", ptr("gui.hist.rgb")), ("lum", ptr("gui.hist.lum"))], self.hist_channels))
+        v.addLayout(row)
+        self.hist_view = HistogramView()
+        v.addWidget(self.hist_view, 1)
+        self.hist_stats = self._text_box(140)
+        v.addWidget(self.hist_stats)
+        return w
+
+    def _build_field_page(self) -> QWidget:
+        from .pick_detail import FieldView
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 6)
+        row = QHBoxLayout()
+        row.setContentsMargins(12, 0, 12, 0)
+        row.addWidget(Segmented([("single", ptr("field.single")),
+                                 ("average", ptr("field.average", n=FIELD_AVERAGE_FRAMES))], self.field_mode))
+        row.addStretch(1)
+        row.addWidget(Segmented([("grid", ptr("field.view.grid")), ("quad", ptr("field.view.quad"))],
+                                self.field_view))
+        v.addLayout(row)
+        self.field_plot = FieldView()
+        v.addWidget(self.field_plot, 1)
+        self.field_text = self._text_box(250)
+        v.addWidget(self.field_text)
+        return w
+
+    def _build_preview_page(self) -> QWidget:
         pane = QWidget()
-        pane.setFixedWidth(430)
-        pane.setStyleSheet(f"background: {D.list_bg}; border-left: 1px solid {D.separator};")
         v = QVBoxLayout(pane)
-        v.setContentsMargins(12, 10, 12, 10)
+        v.setContentsMargins(12, 2, 12, 10)
         v.setSpacing(4)
         self.preview_title = label("", D.label, 9, bold=True)
         self.preview_sky = label("", D.secondary, 8.5, wrap=True)
@@ -321,7 +431,17 @@ class PickPage(Page):
         g.add(ParameterToggle(ptr("gui.toggle.recursive"), self.recursive), 4)
         g.add(ParameterToggle(ptr("gui.toggle.watch"), self.watch))
         self.load_btn = button(ptr("gui.btn.load"), on_click=self._load_report)
-        g.add_row(self.load_btn)
+        self.new_btn = button(ptr("gui.btn.measure_new"), tooltip=ptr("gui.btn.measure_new.help"),
+                              on_click=self._measure_new)
+        g.add_row(self.new_btn, self.load_btn)
+
+        # 整理檔案（Pick 0.6）：混了多台相機、濾鏡、曝光的資料夾，依勾選的參數搬進子資料夾
+        g = ins.add(self.group("organize", ptr("gui.group.organize"), ptr("gui.group.organize.info")))
+        for k in ORGANIZE_KEYS:
+            g.add(ParameterToggle(ptr(f"gui.organize.{k}"), self.organize_by[k]))
+        self.organize_btn = button(ptr("gui.btn.organize"), on_click=self._organize)
+        self.undo_organize_btn = button(ptr("gui.btn.undo_organize"), on_click=self._undo_organize)
+        g.add_row(self.organize_btn, self.undo_organize_btn)
 
         g = ins.add(self.group("rejects", ptr("gui.group.rejects"), ptr("gui.group.rejects.info")))
         g.add(label(ptr("gui.reject_folder"), D.secondary, 8.5))
@@ -379,6 +499,9 @@ class PickPage(Page):
         else:
             self.measure_btn.setText(ptr("gui.btn.remeasure") if self.frames else ptr("gui.btn.measure"))
             self.measure_btn.setEnabled(has_folder)
+        self.new_btn.setEnabled(not busy and has_folder and bool(self.frames))
+        self.organize_btn.setEnabled(not busy and has_folder and bool(self.frames))
+        self.undo_organize_btn.setEnabled(not busy and has_folder)
         self.move_btn.setEnabled(not busy and self.selection is not None)
         n_keep = self.selection.n_keep if self.selection is not None else 0
         self.send_btn.setEnabled(not busy and n_keep > 0)
@@ -456,6 +579,7 @@ class PickPage(Page):
         self.frames, self.selection = [], None
         self.overrides = read_overrides(folder / REPORT_NAME) if folder.is_dir() else {}
         self._previews.clear()
+        self._field_cache.clear()
         self._preview_key = None
         self._clear_preview(ptr("gui.preview.hint"))
         self._fill_table()
@@ -542,6 +666,28 @@ class PickPage(Page):
                                     extra=ptr("gui.status.includes_rejected", n=k) if k else ""), 0.0)
         self._run_measure(files, home_of, "measured")
 
+    def _measure_new(self) -> None:
+        """只量還沒有結果的檔案（新拍的、上次按停止沒量完的），量完加進現有的結果、整批重算門檻（Pick 0.9）。"""
+        folder, reject_dir = self.folder, self._reject_dir()
+        if folder is None or reject_dir is None or not folder.is_dir() or self.is_busy():
+            return
+        files, home_of = collect_files(folder, reject_dir, bool(self.recursive.get()))
+        known = {frame_key(f.file, folder) for f in self.frames}
+        new = [p for p in files if frame_key(home_of.get(str(p), p), folder) not in known]
+        if not new:
+            info(self, ptr("gui.measure_new.nothing"))
+            return
+        n = len(new)
+        self.set_status(lambda: ptr("gui.status.measuring", n=n, extra=""), 0.0)
+        self._run_measure(new, home_of, "added")
+
+    def _merge_frames(self, new: list[FrameMetrics]) -> None:
+        """新量的加進現有的結果（同一張重量過就換掉）、重算門檻、存報表。"""
+        keys = {frame_key(m.file, self.folder) for m in new}
+        self.frames = [f for f in self.frames if frame_key(f.file, self.folder) not in keys] + list(new)
+        self._apply()
+        self._save_report()
+
     def _run_measure(self, files: list[Path], home_of: dict[str, str], kind: str) -> None:
         self.cancel.clear()
         self._started = time.monotonic()
@@ -553,8 +699,9 @@ class PickPage(Page):
                 frames = measure_files(files, workers, cancel=cancel, home_of=home_of,
                                        progress=lambda i, n, m: post(("progress", i, n, m)))
                 post((kind, frames))
-            except Cancelled:
-                post(("cancelled",))
+            except Cancelled as stopped:
+                # Pick 0.9：中止前量好的交回來（舊版沒有 partial）；重新量測整批時停止，量好的也留著
+                post(("cancelled", list(getattr(stopped, "partial", None) or [])))
             except Exception:  # noqa: BLE001
                 post(("error", traceback.format_exc()))
 
@@ -622,6 +769,12 @@ class PickPage(Page):
             if event[1] == self._preview_key:
                 self._clear_preview(ptr("gui.preview.failed", error=event[2]))
             return
+        if kind == "field":
+            _, cache_key, result = event
+            self._field_running.discard(cache_key)
+            self._field_cache[cache_key] = result
+            self._refresh_detail()
+            return
         if kind == "progress":
             _, i, n, m = event
             eta = (time.monotonic() - self._started) / max(1, i) * (n - i)
@@ -633,10 +786,7 @@ class PickPage(Page):
         self.progress = None
         if kind == "watched":
             new = event[1]
-            keys = {frame_key(m.file, self.folder) for m in new}
-            self.frames = [f for f in self.frames if frame_key(f.file, self.folder) not in keys] + new
-            self._apply()
-            self._save_report()
+            self._merge_frames(new)
             latest = max(new, key=lambda m: (m.date_obs or "", m.file))
             n, name, total = len(new), Path(latest.file).name, len(self.frames)
             self.set_status(lambda: ptr("gui.status.watch_added", n=n, name=name, total=total))
@@ -649,8 +799,18 @@ class PickPage(Page):
             self.set_status(lambda: ptr("gui.status.done", n=n, m=took)
                             + (ptr("gui.status.done_errors", n=errors) if errors else "")
                             + ptr("gui.status.done_saved", report=REPORT_NAME))
+        elif kind == "added":
+            self._merge_frames(event[1])
+            n, total = len(event[1]), len(self.frames)
+            self.set_status(lambda: ptr("gui.status.added", n=n, total=total))
         elif kind == "cancelled":
-            self.set_status(lambda: ptr("gui.status.cancelled"))
+            partial = event[1] if len(event) > 1 else []
+            if partial:  # 已經量好的留著，之後按「量測新檔案」補完剩下的就好
+                self._merge_frames(partial)
+                n = len(partial)
+                self.set_status(lambda: ptr("gui.status.cancelled_kept", n=n))
+            else:
+                self.set_status(lambda: ptr("gui.status.cancelled"))
         elif kind == "error":
             self.set_status(lambda: ptr("gui.status.failed"))
             error(self, ptr("gui.err.measure", error=event[1][-1500:]))
@@ -694,7 +854,10 @@ class PickPage(Page):
         total = sum(weights.values())
         cfg.weights = {m: w / total for m, w in weights.items()}
         tolerance = max(0.0, float(self.exposure_tol.get()))
-        pick_settings.save_settings(weights=weights, exposure_tolerance=tolerance)
+        pick_settings.save_settings(
+            weights=weights, exposure_tolerance=tolerance, group_keys=list(self._group_keys()),
+            threshold={"method": self.method.get(), "pass": float(self.pass_line.get()),
+                       "min_score": float(self.min_score.get()), "keep_best": float(self.keep_best.get())})
         self.selection = sel = decide(self.frames, self._group_keys(), "score", cfg, exposure_tolerance=tolerance,
                                       overrides=self.overrides, root=self.folder)
         n, kept = len(sel.decisions), sel.n_keep
@@ -857,6 +1020,7 @@ class PickPage(Page):
         self._preview_key = key
         self.preview_title.setText(Path(key).name)
         self.preview_sky.setText(self._sky_text(key))
+        self._refresh_detail()
         if key in self._previews:
             self._previews.move_to_end(key)
             self._show_preview()
@@ -896,6 +1060,7 @@ class PickPage(Page):
         preview = self._previews.get(self._preview_key or "")
         if preview is None:
             return
+        self._refresh_detail()          # 資訊、直方圖要用預覽讀到的檔頭與統計
         dpr = self.devicePixelRatioF()
         width = 400
         thumb = thumbnail(preview, int(width * dpr), int(280 * dpr))
@@ -908,6 +1073,193 @@ class PickPage(Page):
         cu = pil_to_pixmap(closeup(preview, *self._preview_center, cells, 2))
         self.preview_closeup.setPixmap(cu)
         self.preview_caption.setText(ptr("gui.preview.closeup"))
+
+    # ------------------------------------------------------------------ 資訊、直方圖、像場
+
+    def _show_pane(self) -> None:
+        if hasattr(self, "panes"):
+            self.panes.setCurrentIndex(PANES.index(self.pane.get()) if self.pane.get() in PANES else 0)
+            self._refresh_detail()
+
+    def _decision(self, key: str | None):
+        if self.selection is None or not key:
+            return None
+        return next((d for d in self.selection.decisions if frame_key(d.metrics.file, self.folder) == key), None)
+
+    def _refresh_detail(self) -> None:
+        """更新看得到的那一頁（資訊、直方圖或像場）；預覽頁不用。"""
+        if not hasattr(self, "panes"):
+            return
+        pane, key = self.pane.get(), self._preview_key
+        if pane == "field":
+            self._show_field(key)
+            return
+        if pane not in ("info", "hist"):
+            return
+        from .pick_detail import lines_html, pick_detail
+        detail = pick_detail()
+        preview = self._previews.get(key) if key else None
+        if pane == "hist":
+            self.hist_view.set_data(preview, self.hist_stretch.get() != "linear", self.hist_channels.get() == "lum")
+            self.hist_stats.setHtml(lines_html(detail.histogram_stats(preview), mono=True))
+            return
+        d, sel = self._decision(key), self.selection
+        if d is None or sel is None:
+            self.info_text.setHtml(lines_html([(ptr("gui.preview.hint"), "dim")]))
+            return
+        weights = self._weights_now() or {}
+        total = sum(weights.values()) or 1.0
+        lines = detail.info_lines(d, sel.results.get(d.group), {m: w / total for m, w in weights.items()},
+                                  [x for x in sel.decisions if x.group == d.group], preview, self._sky_text(key),
+                                  sel.thresholds.get(d.group))
+        self.info_text.setHtml(lines_html(lines))
+
+    def _field_targets(self, key: str | None) -> tuple[str, list[str]] | None:
+        """像場要量哪幾張：(快取代號, [片的代號…])。單張是選到的那張；平均是分數最高的幾張保留片。"""
+        if self.field_mode.get() != "average":
+            return (key, [key]) if key else None
+        if self.selection is None:
+            return None
+        kept = sorted((d for d in self.selection.decisions if d.keep and d.score is not None),
+                      key=lambda d: -d.score)[:FIELD_AVERAGE_FRAMES]
+        keys = [frame_key(d.metrics.file, self.folder) for d in kept]
+        return ("avg:" + "|".join(keys), keys) if keys else None
+
+    def _show_field(self, key: str | None) -> None:
+        """「像場」頁：量過就畫出來，還沒量就在背景量（單張幾秒，平均要多等一下）。"""
+        from .pick_detail import lines_html, pick_detail
+        targets = self._field_targets(key)
+        result, message = None, ptr("gui.preview.hint")
+        if targets is None and self.field_mode.get() == "average":
+            message = ptr("field.no_frames")
+        elif targets is not None:
+            cache_key, keys = targets
+            result = self._field_cache.get(cache_key)
+            if isinstance(result, str):                    # 量測失敗的訊息
+                result, message = None, result
+            elif result is None:
+                message = ptr("field.measuring")
+                if cache_key not in self._field_running:
+                    self._start_field(cache_key, keys)
+        view = self.field_view.get()
+        self.field_plot.set_data(result, message, view)
+        self.field_text.setHtml(lines_html(pick_detail().field_lines(result, view)))
+
+    def _start_field(self, cache_key: str, keys: list[str]) -> None:
+        paths = [p for p in (self._current_path(k) for k in keys) if p is not None]
+        if not paths:
+            self._field_cache[cache_key] = ptr("gui.preview.missing")
+            return
+        self._field_running.add(cache_key)
+        post, average = self.bridge.post, cache_key.startswith("avg:")
+
+        def work() -> None:
+            try:
+                results = [analyze_frame(p) for p in paths]
+                post(("field", cache_key, combine(results) if average or len(results) > 1 else results[0]))
+            except Exception as exc:  # noqa: BLE001
+                post(("field", cache_key, ptr("field.failed", error=exc)))
+
+        run_thread(work, "pick-field")
+
+    # ------------------------------------------------------------------ 整理檔案
+
+    def _organize_keys(self) -> tuple[str, ...]:
+        return tuple(k for k in ORGANIZE_KEYS if self.organize_by[k].get())
+
+    def _moved_to_rejects(self, folder: Path) -> bool:
+        """有淘汰片還在淘汰片資料夾裡：整理前後要先全部還原，不然搬移紀錄的原位置會對不上。"""
+        return bool(collect_files(folder, self._reject_dir(), bool(self.recursive.get()))[1])
+
+    def _organize(self) -> None:
+        """依勾選的參數把影像搬進子資料夾（例如 ASI2600MC/Ha/300s/），報表、手動覆寫跟著換位置。"""
+        folder = self.folder
+        if folder is None or not self.frames or self.is_busy():
+            return
+        keys = self._organize_keys()
+        if not keys:
+            info(self, ptr("gui.organize.no_keys"))
+            return
+        if self._moved_to_rejects(folder):
+            info(self, ptr("gui.organize.restore_first"))
+            return
+        plan = plan_organize(self.frames, folder, keys, max(0.0, float(self.exposure_tol.get())))
+        if not plan:
+            info(self, ptr("gui.organize.nothing"))
+            return
+        counts: dict[str, int] = {}
+        for _, target in plan:
+            sub = frame_key(target.parent, folder)
+            counts[sub] = counts.get(sub, 0) + 1
+        shown = sorted(counts.items())[:12]
+        dirs = "\n".join([ptr("gui.move.dir_line", dir=sub, n=n) for sub, n in shown]
+                         + ([ptr("gui.move.more_dirs", n=len(counts) - len(shown))] if len(counts) > len(shown) else []))
+        if not ask_yes_no(self, ptr("gui.organize.confirm", n=len(plan), dirs=dirs)):
+            return
+        self.watch.set(False)
+        try:
+            done = organize(plan, folder)
+        except Exception as exc:  # noqa: BLE001
+            error(self, ptr("gui.organize.error", error=exc))
+            self.open_folder(folder)            # 搬到一半：重開資料夾，報表用檔名認回已經搬走的
+            return
+        self._relocate_frames(dict(done))
+        n, k = len(done), len(counts)
+        self.set_status(lambda: ptr("gui.organize.done", n=n, k=k))
+
+    def _undo_organize(self) -> None:
+        folder = self.folder
+        if folder is None or self.is_busy():
+            return
+        n = pending_undo(folder)
+        if n == 0:
+            info(self, ptr("gui.organize.undo_nothing"))
+            return
+        if self._moved_to_rejects(folder):
+            info(self, ptr("gui.organize.restore_first"))
+            return
+        if not ask_yes_no(self, ptr("gui.organize.undo_confirm", n=n)):
+            return
+        self.watch.set(False)
+        try:
+            done = undo_organize(folder)
+        except Exception as exc:  # noqa: BLE001
+            error(self, ptr("gui.organize.error", error=exc))
+            self.open_folder(folder)
+            return
+        self._relocate_frames(dict(done))
+        restored = len(done)
+        self.set_status(lambda: ptr("gui.organize.undo_done", n=restored))
+
+    def _relocate_frames(self, moved: dict[Path, Path]) -> None:
+        """檔案搬了位置（{原本的絕對路徑: 新位置}）：量測結果、手動覆寫換到新位置，存回報表；
+        有影像在子資料夾裡就改成包含子資料夾。"""
+        folder = self.folder
+        if folder is None:
+            return
+        new_keys: dict[str, str] = {}
+        for f in self.frames:
+            new = moved.get(Path(f.file).resolve())
+            if new is not None:
+                old = frame_key(f.file, folder)
+                f.file = str(new)
+                new_keys[old] = frame_key(new, folder)
+        self.overrides = {new_keys.get(k, k): v for k, v in self.overrides.items()}
+        self._previews.clear()
+        self._field_cache.clear()
+        self._preview_key = None
+        self._clear_preview(ptr("gui.preview.hint"))
+        files, home_of = collect_files(folder, None, True)
+        recursive = any("/" in frame_key(home_of.get(str(p), p), folder) for p in files)
+        self._setting_folder = True
+        try:
+            self.recursive.set(recursive)
+        finally:
+            self._setting_folder = False
+        if self.frames:
+            self._apply()
+            self._save_report()
+        self.refresh()
 
     def _move_closeup(self, pos) -> None:
         if self._preview_key not in self._previews or not hasattr(self, "_thumb_size"):

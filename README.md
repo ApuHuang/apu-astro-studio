@@ -14,6 +14,20 @@
   同一套器材的多個濾鏡直接合成 HOO／SHO／RGB
 - 三個步驟也都能單獨用；處理參數跟三個獨立版共用同一份設定
 
+**挑片**
+
+- 量測每張的星點大小、離心率、星點數、背景、訊噪比，依分數自動分保留與淘汰，門檻怎麼調結果即時更新
+- 清單右邊看選到的那一張：**預覽**（點一下看 1:1）、**資訊**（拍攝資料、分數怎麼算出來、跟同組比）、
+  **直方圖**（拉伸前後、分色或亮度）、**像場**（九宮格或四邊形：看感光元件有沒有傾斜、有沒有場曲）
+- 按停止時量好的片會留著，之後「量測新檔案」只補沒量過的；拍攝中可以開「監看資料夾」，新片進來自動量
+- **整理檔案**：混了多台相機、濾鏡、曝光的資料夾，依勾選的參數搬進子資料夾，可以復原
+
+**疊圖**
+
+- light 與 dark、flat、bias 一起加入，自動分類、配對、校正、對齊、整合；有 NVIDIA 顯示卡時用 GPU
+- 抑制亮星旁的暗環、選用的畸變修正（廣角鏡頭、合併不同器材）、Drizzle、多個濾鏡與多晚
+- 快取用了多少空間看得到，可以一鍵清除
+
 **後製工作室**
 
 - **可以回頭改的步驟鏈**：建議流程是 去光梯度 → 校色 → 反摺積 → AI 降噪 → 去星 → 降噪 → 分開拉伸 → 調色 →
@@ -51,7 +65,10 @@ AI 降噪可以用任何支援 DirectX 12 的顯示卡。沒有獨立顯示卡�
 Mac 版沒有顯示卡加速（疊圖、後製、AI 降噪都用 CPU），功能一樣、速度比有 NVIDIA 顯示卡的 Windows 慢。
 
 有新版本時，視窗左上角版號旁邊會出現「↓ 新版」，按一下用瀏覽器下載。程式只會連到 GitHub 查版本、一天最多一次，
-不會自己下載或更新；不想檢查的話，在設定檔（Windows：`%APPDATA%\APU Astro\settings.json`）加上 `"check_updates": false`。
+不會自己下載或更新；不想檢查的話，在版號上按右鍵，取消「開啟時檢查新版本」。
+
+程式遇到沒預期到的錯誤時會跳出訊息，並把詳細內容記在 `error.log`（Windows：`%APPDATA%\APU Astro\error.log`），
+回報問題時請附上這個檔案。
 
 ## 使用方式
 
@@ -81,8 +98,11 @@ python -m venv .venv
 .venv\Scripts\python packaging\build_exe.py  # 打包 → dist\APUAstro-<版本>-win64.zip
 ```
 
-需要 APU Pick、APU Photons、APU Processing 三個 repo 放在同一層，用 editable 安裝；Photons 要 0.2 以上
+需要 APU Pick、APU Photons、APU Processing 三個 repo 放在同一層，用 editable 安裝；Photons 要 0.3 以上
 （打包前會檢查版本）。matplotlib 只是打包時要有（astropy 的打包規則會載入它的繪圖模組），不會包進程式。
+
+推到 master 和每個 PR 都會在 GitHub 上跑測試（Windows、macOS）。打包與測試用的套件版本鎖在
+`packaging/constraints.txt`（`pip install -c packaging/constraints.txt ...`）。
 
 ## 授權
 

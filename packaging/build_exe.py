@@ -5,8 +5,8 @@
 → Windows：dist/APUAstro/APUAstro.exe 與 dist/APUAstro-<版本>-win64.zip
 → macOS：dist/APUAstro.app 與 dist/APUAstro-<版本>-macos-<arm64|x86_64>.zip
 
-- 三個原本的專案用 editable 安裝的本機 repo（見 README）；打包前檢查版本：Photons 要 0.2 以上
-  （整合版用 0.2 才有的「加入檔案」），版本不對就停下來，免得打包到另一個分支的程式。
+- 三個原本的專案用 editable 安裝的本機 repo（見 README）；打包前檢查版本：Photons 要 0.3 以上
+  （疊圖頁用 0.3 的內插限幅、畸變修正、快取管理），版本不對就停下來，免得打包到另一個分支的程式。
 - GPU（只有 Windows）：跟 APU Photons 一樣包進 CuPy 與 CUDA runtime／NVRTC，有 NVIDIA 顯示卡就用、沒有就用 CPU；
   用不到的 cuBLAS、cuFFT… 打包後刪掉（省 1.8 GB），由冒煙測試確認 GPU 疊圖仍正常。
   macOS 沒有 CUDA：疊圖用 CPU，AI 降噪用 onnxruntime 的 CPU（不包 CuPy）。
@@ -65,8 +65,8 @@ def check_versions() -> None:
     found = {"APU Pick": astro_light_selector.__version__, "APU Photons": apu_photons.__version__,
              "APU Processing": apu_processing.__version__}
     print("打包的版本：" + "、".join(f"{k} {v}" for k, v in found.items()))
-    if major_minor(apu_photons.__version__) < (0, 2):
-        raise SystemExit(f"APU Photons 是 {apu_photons.__version__}，整合版要 0.2 以上：請先更新 ApuPhotonsUtility")
+    if major_minor(apu_photons.__version__) < (0, 3):
+        raise SystemExit(f"APU Photons 是 {apu_photons.__version__}，整合版要 0.3 以上：請先更新 ApuPhotonsUtility")
 
 
 def ensure_not_running(bundle: Path) -> None:

@@ -40,8 +40,15 @@ def save_settings(**values: object) -> None:
     """合併寫入；存不進去就算了，只是下次要重選。"""
     data = load_settings()
     data.update(values)
+    path = settings_path()
+    tmp = path.with_name(path.name + ".tmp")
     try:
-        settings_path().parent.mkdir(parents=True, exist_ok=True)
-        settings_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 先寫暫存檔再換名：寫到一半當機、斷電，原本的設定還在（不會只剩半份、下次全部歸零）
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
     except OSError:
-        pass
+        try:
+            tmp.unlink()
+        except OSError:
+            pass

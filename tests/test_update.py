@@ -36,6 +36,72 @@ def test_checks_once_a_day():
     save_settings(update=None)
 
 
+def test_version_menu_turns_the_check_off_and_on(app, window, monkeypatch):
+    import time
+    monkeypatch.setattr(update, "fetch_latest", lambda *a, **k: RELEASE)
+    update.remember(RELEASE, now=time.time())
+    try:
+        window.check_for_updates()
+        assert not window.update_badge.isHidden()
+        check = window._version_menu().actions()[0]
+        assert check.isCheckable() and check.isChecked()
+        check.setChecked(False)                               # 選單取消勾選
+        assert load_settings()["check_updates"] is False and window.update_badge.isHidden()
+        check = window._version_menu().actions()[0]
+        assert not check.isChecked()
+        check.setChecked(True)
+        assert load_settings()["check_updates"] is True and not window.update_badge.isHidden()
+    finally:
+        save_settings(update=None, check_updates=True)
+
+
+def test_error_log_and_hook(tmp_path, monkeypatch):
+    import sys
+    import threading
+
+    from apu_astro import errorlog
+    monkeypatch.setattr(errorlog, "log_path", lambda: tmp_path / "error.log")
+    shown = []
+    old_hook, old_thread_hook = sys.excepthook, threading.excepthook
+    try:
+        errorlog.install(lambda message, log: shown.append((message, log)))
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            sys.excepthook(*sys.exc_info())
+        text = (tmp_path / "error.log").read_text(encoding="utf-8")
+        assert "ValueError: boom" in text and "APU Astro" in text and "Traceback" in text
+        assert shown == [("ValueError: boom", tmp_path / "error.log")]
+        t = threading.Thread(target=lambda: 1 / 0)             # 背景執行緒：只記錄，不跳對話框
+        t.start()
+        t.join()
+        assert "ZeroDivisionError" in (tmp_path / "error.log").read_text(encoding="utf-8") and len(shown) == 1
+    finally:
+        sys.excepthook, threading.excepthook = old_hook, old_thread_hook
+
+
+def test_settings_are_written_atomically(monkeypatch):
+    """寫到一半失敗：原本的設定還在，不留暫存檔。"""
+    from pathlib import Path
+
+    from apu_astro import settings
+    save_settings(marker="kept")
+    real = Path.write_text
+
+    def broken(self, *a, **k):
+        if self.name.endswith(".tmp"):
+            real(self, "{ half", encoding="utf-8")
+            raise OSError("disk full")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", broken)
+    save_settings(marker="lost")
+    monkeypatch.undo()
+    assert load_settings()["marker"] == "kept"
+    assert not settings.settings_path().with_name(settings.settings_path().name + ".tmp").exists()
+    save_settings(marker=None)
+
+
 def test_badge_shows_cached_release_without_network(app, window, monkeypatch):
     import time
     called = []

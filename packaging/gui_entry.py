@@ -62,6 +62,15 @@ def smoke_test(folder: str, out: str, expect_gpu: bool) -> int:
         frames = measure_files(files, 2, home_of=home)
         assert len(frames) == len(files) and all(f.error is None for f in frames), [f.error for f in frames]
         lines.append(f"pick={len(frames)}")
+        # 清單右邊的資訊、直方圖、像場：文字用 Pick 的 detail 模組（打包後沒有 matplotlib，要靠空殼載入），像場實際量一張
+        from astro_light_selector.field import analyze_frame
+        from astro_light_selector.preview import make_preview
+
+        from apu_astro.pages.pick_detail import pick_detail
+        detail = pick_detail()
+        assert detail.histogram_stats(make_preview(files[0])), "histogram_stats 沒有內容"
+        assert detail.field_lines(analyze_frame(files[0])), "field_lines 沒有內容"
+        lines.append("detail")
 
         from apu_photons import backend
         from apu_photons.engine import Settings, run

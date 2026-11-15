@@ -11,7 +11,7 @@ from pathlib import Path
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import (QAction, QColor, QCloseEvent, QDesktopServices, QKeySequence, QPainter, QPaintEvent,
                            QShortcut)
-from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMainWindow, QProgressBar,
+from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMainWindow, QMenu, QProgressBar,
                                QStackedWidget, QVBoxLayout, QWidget)
 
 from . import __version__, icons, update
@@ -265,7 +265,12 @@ class MainWindow(QMainWindow):
         h.setSpacing(8)
         name = label(APP_NAME, D.label, 11, bold=True)
         h.addWidget(name)
-        h.addWidget(Badge(f"v{__version__}"), 0, Qt.AlignmentFlag.AlignVCenter)
+        self.version_badge = Badge(f"v{__version__}")
+        self.version_badge.setToolTip(tr("version.help"))
+        self.version_badge.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.version_badge.customContextMenuRequested.connect(
+            lambda pos: self._version_menu().exec(self.version_badge.mapToGlobal(pos)))
+        h.addWidget(self.version_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         # 有新版才出現：版號旁邊藍色的小框，按一下用瀏覽器下載
         self.update_info: update.Update | None = None
         self.update_badge = Badge("", D.accent)
@@ -392,6 +397,7 @@ class MainWindow(QMainWindow):
         set_language(lang)
         save_settings(language=lang)
         self.rail.retranslate()
+        self.version_badge.setToolTip(tr("version.help"))
         self._show_update(self.update_info)
         for page in self.pages.values():
             page.rebuild()
@@ -418,6 +424,24 @@ class MainWindow(QMainWindow):
                     pass
 
             run_thread(work, "apu-astro-update")
+
+    def _version_menu(self) -> QMenu:
+        """版號上按右鍵：要不要檢查新版本、打開下載頁面（整合版沒有選單列）。"""
+        menu = QMenu(self)
+        check = QAction(tr("update.check"), menu)
+        check.setCheckable(True)
+        check.setChecked(update.enabled())
+        check.toggled.connect(self.set_update_check)
+        menu.addAction(check)
+        menu.addAction(tr("update.releases"), lambda: QDesktopServices.openUrl(QUrl(update.RELEASES_URL)))
+        return menu
+
+    def set_update_check(self, on: bool) -> None:
+        save_settings(check_updates=bool(on))
+        if on:
+            self.check_for_updates()
+        else:
+            self._show_update(None)
 
     def _update_fetched(self, event: tuple) -> None:
         update.remember(event[1])

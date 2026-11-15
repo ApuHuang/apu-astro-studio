@@ -37,6 +37,12 @@ def main(argv: list[str] | None = None) -> int:
         set_language(st["language"])
     apply_theme(app)
     win = MainWindow([a for a in argv if not a.startswith("-")])
+
+    from . import errorlog
+    from .i18n import tr
+    from .ui.widgets import error
+    errorlog.install(lambda message, log: error(
+        win, tr("err.unexpected", error=message[-800:], log=str(log) if log else tr("err.no_log"))))
     screen = app.primaryScreen().availableGeometry()
     w, h = st.get("geometry") or (1440, 920)
     win.resize(min(int(w), screen.width() - 40), min(int(h), screen.height() - 60))

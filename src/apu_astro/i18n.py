@@ -65,6 +65,11 @@ _ZH = {
     "update.help": "有新版本 {version}（目前是 {current}）。按一下用瀏覽器下載：{file}\n"
                    "只會連到 GitHub 查版本，一天最多一次。",
     "update.page": "下載頁面",
+    "update.check": "開啟時檢查新版本",
+    "update.releases": "打開下載頁面",
+    "version.help": "按右鍵：設定要不要檢查新版本、打開下載頁面",
+    "err.unexpected": "發生沒預期到的錯誤：\n{error}\n\n詳細內容記在：\n{log}\n回報問題時請附上這個檔案。",
+    "err.no_log": "（紀錄檔寫不進去）",
     "view.compare": "對照",
     "view.compare.help": "左邊原圖、右邊目前結果，拖曳中間的線比較",
     "compare.left": "原圖",
@@ -119,6 +124,12 @@ _EN = {
     "update.help": "Version {version} is available (you have {current}). Click to download it in your browser: {file}\n"
                    "Only GitHub is contacted, at most once a day.",
     "update.page": "download page",
+    "update.check": "Check for New Versions at Startup",
+    "update.releases": "Open the Download Page",
+    "version.help": "Right-click to turn the new-version check on or off, or open the download page",
+    "err.unexpected": "An unexpected error occurred:\n{error}\n\nDetails were saved to:\n{log}\n"
+                      "Please attach this file when reporting the problem.",
+    "err.no_log": "(the log file could not be written)",
     "view.compare": "Compare",
     "view.compare.help": "Original on the left, current result on the right; drag the line to compare",
     "compare.left": "Original",

@@ -1,4 +1,4 @@
-"""疊圖（APU Photons 0.2 的核心）：加入檔案（light 與校正檔一起）→ 自動分類、分組、配對校正檔（可以改）
+"""疊圖（APU Photons 0.3 的核心）：加入檔案（light 與校正檔一起）→ 自動分類、分組、配對校正檔（可以改）
 → 試跑或疊圖 → 在「結果」逐組放大檢視 → 送去後製。
 
 分組、配對、疊圖都直接呼叫 apu_photons（ingest、run），設定與 Photons 獨立版共用同一個設定檔。
@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 from apu_photons import backend
 from apu_photons import settings as photons_settings
+from apu_photons.cache import cache_size, clear_cache, default_cache, format_size
 from apu_photons.engine import Cancelled, Result, Settings, run
 from apu_photons.i18n import get_language as photons_language
 from apu_photons.i18n import tr as ptr
@@ -36,7 +37,8 @@ from ..i18n import tr
 from ..theme import D, fonts
 from ..ui.imageview import ImageView
 from ..ui.var import Var
-from ..ui.widgets import (Hero, Inspector, MetricRow, ParameterSlider, ParameterToggle, Segmented, ask_three, button,
+from ..ui.widgets import (Hero, Inspector, MetricRow, ParameterSlider, ParameterToggle, Segmented, ask_three, ask_yes_no,
+                          button,
                           error, info, label, short_path, warn)
 from ..ui.worker import Bridge, run_thread
 from .base import Page, Views
@@ -116,6 +118,8 @@ class StackPage(Page):
         self.weights = Var(bool(p.get("weights", True)))
         self.local_norm = Var(bool(p.get("local_norm", False)))
         self.dual_band = Var(bool(p.get("dual_band", True)))
+        self.clamp = Var(bool(p.get("clamp", True)))             # Photons 0.3：內插限幅（去掉亮星旁的暗環）
+        self.distortion = Var(bool(p.get("distortion", False)))  # Photons 0.3：對齊時加畸變修正
         self.split_nights = Var(bool(p.get("split_nights", True)))
         self.flat_any_night = Var(bool(p.get("flat_any_night", False)))
         self.temp_tol = Var(float(p.get("temp_tolerance", 2.0)))
@@ -141,7 +145,7 @@ class StackPage(Page):
         self.result_group = Var(0)
 
         for var in (self.rejection, self.low, self.high, self.weights, self.local_norm, self.dual_band, self.bits,
-                    self.gpu, self.workers, self.memory, self.preview_n):
+                    self.clamp, self.distortion, self.gpu, self.workers, self.memory, self.preview_n):
             var.subscribe(lambda _v: self._params_changed())
         for var in (self.scale, self.drizzle, self.pixfrac, self.fill_holes, self.crop, self.min_cov):
             var.subscribe(lambda _v: self._output_changed())
@@ -355,6 +359,8 @@ class StackPage(Page):
         self.high_slider = g.add(ParameterSlider(ptr("gui.slider.high"), self.high, 1.5, 8, sec, 0.1))
         g.add(ParameterToggle(ptr("gui.toggle.weights"), self.weights))
         g.add(ParameterToggle(ptr("gui.toggle.local_norm"), self.local_norm))
+        g.add(ParameterToggle(ptr("gui.toggle.clamp"), self.clamp))
+        g.add(ParameterToggle(ptr("gui.toggle.distortion"), self.distortion))
 
         g = ins.add(self.group("output", ptr("gui.group.output"), ptr("gui.group.output.info")))
         self.align_row = QWidget()
@@ -406,6 +412,12 @@ class StackPage(Page):
         g.add(ParameterSlider(ptr("gui.slider.memory"), self.memory, 1, 32, lambda v: f"{v:.0f} GB"))
         g.add(ParameterSlider(ptr("gui.slider.trial"), self.preview_n, 5, 60,
                               lambda v: ptr("gui.value.frames", n=int(v))))
+        # 快取（校正後的 frame、master 校正檔、工作檔）不會自己變小：看得到大小、可以清除（Photons 0.3）
+        self.cache_btn = button(ptr("gui.btn.clear_cache"), tooltip=ptr("gui.cache.info"), on_click=self._clear_cache)
+        self.cache_label = label("", D.secondary, 8.5)
+        g.add_row(self.cache_btn, self.cache_label)
+        self._cache_key: tuple | None = None
+        self._cache_bytes = 0
         return ins
 
     # ------------------------------------------------------------------ 外殼
@@ -532,6 +544,33 @@ class StackPage(Page):
             elif sys.platform == "darwin":
                 import subprocess
                 subprocess.run(["open", str(folder)], check=False)
+
+    # ------------------------------------------------------------------ 快取
+
+    def _cache_dirs(self) -> list[Path]:
+        out = self.output_dir.get()
+        return [default_cache(Path(out)), default_cache(Path(out) / "trial")] if out else []
+
+    def _update_cache_info(self, busy: bool, force: bool = False) -> None:
+        """輸出資料夾換了、疊完一次才重新量大小（量一次要掃過整個快取），執行中不量。"""
+        if not hasattr(self, "cache_btn"):
+            return
+        key = (self.output_dir.get(), id(self.result), busy)
+        if force or (key != self._cache_key and not busy):
+            self._cache_bytes = sum(cache_size(c) for c in self._cache_dirs())
+        self._cache_key = key
+        self.cache_label.setText(ptr("gui.cache.size", size=format_size(self._cache_bytes))
+                                 if self._cache_bytes else ptr("gui.cache.empty"))
+        self.cache_btn.setEnabled(not busy and self._cache_bytes > 0)
+
+    def _clear_cache(self) -> None:
+        if self.is_busy() or not self._cache_bytes:
+            return
+        if not ask_yes_no(self, ptr("gui.cache.confirm", size=format_size(self._cache_bytes))):
+            return
+        freed = sum(clear_cache(c) for c in self._cache_dirs())
+        self._update_cache_info(False, force=True)
+        self.set_status(lambda: ptr("gui.cache.cleared", size=format_size(freed)))
 
     # ------------------------------------------------------------------ 濾鏡名稱、指定校正檔
 
@@ -748,11 +787,15 @@ class StackPage(Page):
             target=self.target.get().strip() or None, temp_tolerance=float(self.temp_tol.get()),
             kinds=dict(self.kinds), filter_aliases=dict(self.filter_aliases),
             calib_overrides=json.loads(json.dumps(self.calib_overrides)), merge_trains=merge,
-            file_calib=json.loads(json.dumps(self.file_calib)), grid_train=grid, align_output=align_output)
+            file_calib=json.loads(json.dumps(self.file_calib)), grid_train=grid, align_output=align_output,
+            clamp=bool(self.clamp.get()), distortion=bool(self.distortion.get()))
 
     def _params_changed(self) -> None:
         self._update_output_rules()
+        # params 是整包覆寫的：先帶著原本的內容，獨立版存了、這裡不認識的參數才不會被洗掉
         photons_settings.save_settings(params={
+            **(photons_settings.load_settings().get("params") or {}),
+            "clamp": bool(self.clamp.get()), "distortion": bool(self.distortion.get()),
             "rejection": self.rejection.get(), "low": float(self.low.get()), "high": float(self.high.get()),
             "weights": bool(self.weights.get()), "local_norm": bool(self.local_norm.get()),
             "dual_band": bool(self.dual_band.get()), "split_nights": bool(self.split_nights.get()),
@@ -851,6 +894,8 @@ class StackPage(Page):
         self.flat_any_night.set(bool(s.flat_any_night))
         self.temp_tol.set(float(s.temp_tolerance))
         self.bits.set(str(s.output_bits))
+        self.clamp.set(bool(s.clamp))            # 0.2 的紀錄「完全重現」時是關的（那時沒有限幅）
+        self.distortion.set(bool(s.distortion))
         scale = "2" if s.drizzle == 2 else ("0.5" if s.downsample == 0.5 else "1")
         self.global_output = {"scale": scale, "drizzle": s.drizzle >= 1, "pixfrac": s.pixfrac,
                               "fill_holes": s.fill_holes, "crop": s.crop_common, "min_coverage": s.crop_min_coverage}
@@ -1055,6 +1100,7 @@ class StackPage(Page):
         self.reveal_btn.setEnabled(bool(out) and Path(out).is_dir())
         self.output_label.setText(short_path(out, 46) if out else ptr("gui.output.unset"))
         self.has_result = self.result is not None
+        self._update_cache_info(busy)
         self._update_output_rules()
         self._update_gpu_view()
         self._fill_align_controls()
