@@ -1,0 +1,188 @@
+{
+ "__dict__": [
+  [
+   "field_grid",
+   [
+    [
+     "Elongation\tCorners aren't noticeably more elongated than the center\n",
+     ""
+    ],
+    [
+     "Average of 3 frames; up to 25 stars per cell\n",
+     "dim"
+    ],
+    [
+     "Grid: crops (40 px) from the corners, edges and center of the photo; numbers are the star size in that cell (median FWHM, px), red marks the largest corner. Crops come from the best-scoring frame; numbers are the average\n",
+     "dim"
+    ],
+    [
+     "Some cells have too few stars (nebula in the way, for example) and are left out\n",
+     "bad"
+    ]
+   ]
+  ],
+  [
+   "field_none",
+   []
+  ],
+  [
+   "field_quad",
+   [
+    [
+     "Elongation\tCorners aren't noticeably more elongated than the center\n",
+     ""
+    ],
+    [
+     "Average of 3 frames; up to 25 stars per cell\n",
+     "dim"
+    ],
+    [
+     "Quad: a corner with larger stars bulges outward (differences ×3); the dashed square is a perfectly flat field. Numbers are FWHM (px), short lines show the elongation direction\n",
+     "dim"
+    ],
+    [
+     "Some cells have too few stars (nebula in the way, for example) and are left out\n",
+     "bad"
+    ]
+   ]
+  ],
+  [
+   "histogram",
+   [
+    [
+     "ADU\tBackground\tLowest\tHighest\tSaturated\n",
+     "dim"
+    ],
+    [
+     "L\t2112\t1859\t40821\t—\n",
+     ""
+    ]
+   ]
+  ],
+  [
+   "info",
+   [
+    [
+     "Capture\n",
+     "head"
+    ],
+    [
+     "Time\t2026-11-01 20:10:00\n",
+     ""
+    ],
+    [
+     "Exposure\t120 s\n",
+     ""
+    ],
+    [
+     "ISO / Gain\t100 (offset 10)\n",
+     ""
+    ],
+    [
+     "Filter\tL\n",
+     ""
+    ],
+    [
+     "Camera\tTestCam\n",
+     ""
+    ],
+    [
+     "Focal length\t400 mm\n",
+     ""
+    ],
+    [
+     "Pixel size\t3.76 µm\n",
+     ""
+    ],
+    [
+     "Pixel scale\t1.94″/px\n",
+     ""
+    ],
+    [
+     "Binning\t1×1\n",
+     ""
+    ],
+    [
+     "Sensor temp\t-10.0 °C\n",
+     ""
+    ],
+    [
+     "Image size\t160 × 120\n",
+     ""
+    ],
+    [
+     "Target\tTest\n",
+     ""
+    ],
+    [
+     "\nResult\n",
+     "head"
+    ],
+    [
+     "Verdict\tKeep\n",
+     ""
+    ],
+    [
+     "Score\t100.0 (threshold 96.3)\n",
+     ""
+    ],
+    [
+     "Rank in group\t1 of 8\n",
+     ""
+    ],
+    [
+     "Group\tFilter L / 120s exposure\n",
+     ""
+    ],
+    [
+     "\nScore Breakdown\n",
+     "head"
+    ],
+    [
+     "FWHM\t100% of reference × weight 35% → 35.0 pts (−0.0)\n",
+     ""
+    ],
+    [
+     "Eccentricity\t100% of reference × weight 30% → 30.0 pts (−0.0)\n",
+     ""
+    ],
+    [
+     "Stars\t100% of reference × weight 20% → 20.0 pts (−0.0)\n",
+     ""
+    ],
+    [
+     "Background\t100% of reference × weight 15% → 15.0 pts (−0.0)\n",
+     ""
+    ],
+    [
+     "Total\t100.0\n",
+     ""
+    ],
+    [
+     "\nCompared with the Group\n",
+     "head"
+    ],
+    [
+     "FWHM\t2.59 px  median 2.60 px (-0%)  reference 2.59 px\n",
+     ""
+    ],
+    [
+     "Eccentricity\t0.13  median 0.14 (-11%)  reference 0.13\n",
+     ""
+    ],
+    [
+     "Stars\t27  median 27 (+0%)  reference 27\n",
+     ""
+    ],
+    [
+     "Background\t2106 ADU  median 2106 ADU (-0%)  reference 2105 ADU\n",
+     ""
+    ],
+    [
+     "SNR\t168.6  median 179.1 (-6%)  reference 210.7\n",
+     ""
+    ]
+   ]
+  ]
+ ]
+}

@@ -92,9 +92,9 @@ def save(display: np.ndarray, path: Path, o: ExportOptions, header=None, linear:
     tmp = path.with_name(f".{path.stem}.saving{path.suffix}")
     try:
         if suffix in (".fit", ".fits", ".fts"):
-            from apu_processing import imageio
+            from apu_processing import api as papi
             data = linear if linear is not None else display
-            imageio.save_fits(tmp, data[0] if data.ndim == 3 and data.shape[0] == 1 else data, header)
+            papi.save_fits(tmp, data[0] if data.ndim == 3 and data.shape[0] == 1 else data, header)
         else:
             p = finish(display, o)
             icc = _srgb_profile() if o.icc else None

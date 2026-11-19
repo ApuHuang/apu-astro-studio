@@ -1,0 +1,16 @@
+{
+ "__dict__": [
+  [
+   "cpu_gpu",
+   false
+  ],
+  [
+   "has_device",
+   true
+  ],
+  [
+   "workers_is_int",
+   true
+  ]
+ ]
+}

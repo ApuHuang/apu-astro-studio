@@ -13,9 +13,7 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-from apu_processing import compose as pcompose
-from apu_processing import coverage as pcoverage
-from apu_processing import display as pdisplay
+from apu_processing import api as papi
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLineEdit,
                                QMenu, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
@@ -443,12 +441,12 @@ class StudioPage(Page):
             "Builds colour from mono masters: HOO, SHO or RGB. Each channel is sky-subtracted and noise-matched; "
             "strengths can be set per channel.")), key="compose")
         preset = Var(src.compose["preset"])
-        g.add(Segmented([(p, p) for p in pcompose.PRESETS], preset, stretch=True))
+        g.add(Segmented([(p, p) for p in papi.COMPOSE_PRESETS], preset, stretch=True))
         preset.subscribe(lambda v: self._recompose({"preset": v, "channels": []}), g)
         choices = [f"{p.name}（{f}）" if f else p.name for p, f in zip(src.paths, src.filters)] + \
                   [str(T("不使用", "None"))]
         for i, (role, source, strength) in enumerate(src.compose["channels"]):
-            weights = dict(pcompose.PRESETS[src.compose["preset"]])
+            weights = dict(papi.COMPOSE_PRESETS[src.compose["preset"]])
             target = "+".join(c for c, wgt in zip("RGB", weights.get(role, (0, 0, 0))) if wgt)
             g.add(label(f"{role} → {target}", D.label, 9, bold=True), 6)
             combo = QComboBox()
@@ -475,7 +473,7 @@ class StudioPage(Page):
         if src is None or src.composer is None:
             return
         if not compose.get("channels"):
-            s = pcompose.ComposeSettings.for_preset(compose["preset"], src.filters)
+            s = papi.ComposeSettings.for_preset(compose["preset"], src.filters)
             compose = ch.settings_to_dict(s)
         post = self.bridge.post
         self.set_status(lambda: str(T("重新合成…", "Recombining…")), 0.0)
@@ -638,7 +636,7 @@ class StudioPage(Page):
         if t == "curves":
             ed = CurveEditor(lambda curves: self._curves_changed(step, curves))
             c = params.get("curves") or {}
-            ed.set_curves(pdisplay.ToneCurves(**{k: [list(map(float, q)) for q in v] for k, v in c.items()}))
+            ed.set_curves(papi.ToneCurves(**{k: [list(map(float, q)) for q in v] for k, v in c.items()}))
             self._curve_editor = ed
             box = QWidget()
             v = QVBoxLayout(box)
@@ -838,7 +836,7 @@ class StudioPage(Page):
         src = self.chain.source
         if src is None or src.coverage_mask is None:
             return
-        box = pcoverage.suggest_crop(src.coverage_mask.astype(np.float32))
+        box = papi.suggest_crop(src.coverage_mask.astype(np.float32))
         if box:
             self._set_box(step, [float(v) for v in box])
 

@@ -1,0 +1,37 @@
+{
+ "__dict__": [
+  [
+   "en",
+   [
+    "Found 3 FITS files. Click “Measure” to start.",
+    "Close-up ×2 (click the thumbnail to move)",
+    "No frame in this group could be measured; all rejected"
+   ]
+  ],
+  [
+   "merged",
+   {
+    "__dict__": [
+     [
+      "group_keys",
+      [
+       "filter"
+      ]
+     ],
+     [
+      "preview_pane",
+      "hist"
+     ]
+    ]
+   }
+  ],
+  [
+   "zh",
+   [
+    "資料夾裡有 3 張 FITS，按「量測」開始",
+    "放大 ×2（點縮圖換位置）",
+    "這組沒有任何一張能量測，全部淘汰"
+   ]
+  ]
+ ]
+}

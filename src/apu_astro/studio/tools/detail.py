@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from apu_processing import denoise as pdenoise
-from apu_processing import detail as pdetail
+from apu_processing import api as papi
 from scipy import ndimage
 
 from .. import backend, ops, psf
@@ -61,7 +60,7 @@ class Deconvolution(Tool):
         key = ("stars", L.shape)
         stars = ctx.cache.get(key)
         if stars is None:
-            stars = pdetail.find_stars(L)
+            stars = papi.find_stars(L)
             ctx.cache[key] = stars
         ctx.check()
         round_at, sharp_at = self._kernels(L, stars, params, ctx)
@@ -139,7 +138,7 @@ class Deconvolution(Tool):
         grid = provider() if provider is not None else None
         if grid is None or grid.overall is None:
             key = ("fwhm", L.shape)
-            fwhm = ctx.cache.get(key) or pdetail.measure_core_fwhm(L, stars) * pdetail.PSF_CORE_LIMIT
+            fwhm = ctx.cache.get(key) or papi.measure_core_fwhm(L, stars) * papi.PSF_CORE_LIMIT
             ctx.cache[key] = fwhm
             ctx.view["psf_fwhm_full"] = fwhm * ctx.scale
             k = psf.elliptical_kernel(np.eye(2) * max(0.3, fwhm / 2.3548) ** 2)
@@ -156,10 +155,10 @@ class Deconvolution(Tool):
             return covs[key]
         # 每一區都沒有量到（影像小、星少）時用整張的（以前會當掉：max() 空的）
         cells = [c for row in grid.cells for c in row if c is not None] or [grid.overall]
-        ctx.view["psf_fwhm_full"] = round(float(np.median([c.fwhm_minor for c in cells])) * pdetail.PSF_CORE_LIMIT, 2)
+        ctx.view["psf_fwhm_full"] = round(float(np.median([c.fwhm_minor for c in cells])) * papi.PSF_CORE_LIMIT, 2)
         ctx.view["psf_ellipticity_max"] = round(max(c.ellipticity for c in cells), 2)
         round_at = (lambda y, x: psf.round_kernel(cov(y, x))) if params.get("round", True) else None
-        return round_at, (lambda y, x: psf.sharpen_kernel(cov(y, x), pdetail.PSF_CORE_LIMIT))
+        return round_at, (lambda y, x: psf.sharpen_kernel(cov(y, x), papi.PSF_CORE_LIMIT))
 
 
 register(Deconvolution())
@@ -198,7 +197,7 @@ class Sharpen(Tool):
         p = np.clip(img, 0, 1) if not linear else img
         L = ops.luminance(p) if p.shape[0] >= 3 else p[0]
         scales = 5
-        coeffs, smooth = pdenoise.starlet(L, scales)
+        coeffs, smooth = papi.starlet(L, scales)
         ctx.check()
         gains = [float(params.get("detail", 0.4))] * 2 + [float(params.get("structure", 0.3))] * 3
         k = float(params.get("threshold", 2.0))
@@ -213,7 +212,7 @@ class Sharpen(Tool):
             key = ("starmask", L.shape)
             sw = ctx.cache.get(key)
             if sw is None:
-                sw = pdetail.find_stars(L).weight.astype(np.float32)
+                sw = papi.find_stars(L).weight.astype(np.float32)
                 ctx.cache[key] = sw
             boost *= 1 - sw
         hdr = float(params.get("hdr", 0.0))

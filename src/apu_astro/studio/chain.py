@@ -21,10 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-from apu_processing import compose as pcompose
-from apu_processing import coverage as pcoverage
-from apu_processing import recipe as precipe
-from apu_processing.progress import Cancelled as ProcessingCancelled
+from apu_processing import api as papi
 
 from . import io, masks, ops
 from .tools import Cancelled, Ctx, State, get
@@ -141,9 +138,9 @@ class Source:
 def open_source(paths: list[Path], compose: dict | None = None, coverages: list | None = None) -> Source:
     """開檔：一張就直接用；好幾張單色就合成（HOO／SHO／RGB）；疊圖紀錄開它主要對齊組的 master。"""
     paths = [Path(p) for p in paths]
-    records = [p for p in paths if precipe.is_recipe(p)]
+    records = [p for p in paths if papi.is_recipe(p)]
     if records:
-        project = precipe.load(records[0])
+        project = papi.load_recipe(records[0])
         _group, outputs = project.main_group()
         paths = [o.path for o in outputs]
         coverages = [o.coverage for o in outputs]
@@ -160,22 +157,22 @@ def open_source(paths: list[Path], compose: dict | None = None, coverages: list 
                 img = img.mean(axis=0)
             planes.append(img)
             headers.append(h)
-        composer = pcompose.Composer(planes, [p.name for p in paths])
+        composer = papi.Composer(planes, [p.name for p in paths])
         filters = [str(h.get("FILTER", "")).strip() for h in headers]
-        settings = settings_from_dict(compose, filters) if compose else pcompose.ComposeSettings.recommended(filters)
+        settings = settings_from_dict(compose, filters) if compose else papi.ComposeSettings.recommended(filters)
         rgb = composer.compose(settings)
         src = Source(paths, coverages, settings_to_dict(settings), np.ascontiguousarray(rgb, np.float32),
                      headers[0], filters, composer)
     fractions = []
     for p, c in zip(paths, coverages):
-        found = Path(c) if c else pcoverage.find_for(p)
+        found = Path(c) if c else papi.find_coverage(p)
         try:
-            fractions.append(pcoverage.load_fraction(found) if found else None)
+            fractions.append(papi.load_coverage_fraction(found) if found else None)
         except (OSError, ValueError):
             fractions.append(None)
-    cov = pcoverage.combine(fractions, src.image.shape[-2:])
+    cov = papi.combine_coverage(fractions, src.image.shape[-2:])
     if cov is not None:
-        good = pcoverage.good_mask(cov)
+        good = papi.coverage_good_mask(cov)
         src.coverage_mask = None if good.all() else good
     _align(src)
     return src
@@ -197,7 +194,7 @@ def settings_to_dict(s) -> dict:
 
 
 def settings_from_dict(d: dict, filters: list[str]):
-    s = pcompose.ComposeSettings.for_preset(d.get("preset", "HOO"), filters)
+    s = papi.ComposeSettings.for_preset(d.get("preset", "HOO"), filters)
     for i, (_role, source, strength) in enumerate(d.get("channels", [])):
         if i < len(s.channels):
             s = s.with_source(i, int(source)).with_strength(i, float(strength))
@@ -437,7 +434,7 @@ class Chain:
                 progress(i / (upto + 1), step.kind)
                 try:
                     state = tool.run(state, step.params, step.layer, step.mask, ctx)
-                except ProcessingCancelled as exc:
+                except papi.Cancelled as exc:
                     raise Cancelled() from exc
                 with self._lock:
                     self._analysis[akey] = (in_key, acache)
@@ -461,10 +458,10 @@ class Chain:
         """原圖（完整解析度）的繞射芒方向（度）或 None，第一次用到時量。"""
         with self._lock:
             if self._spike_angle == "unset" and self.source is not None:
-                from apu_processing import detail as pdetail
+                from apu_processing import api as papi
                 from .tools import stars as tstars
                 L = ops.planes(self.source.image).mean(axis=0)
-                found = pdetail.find_stars(L, 5.0)
+                found = papi.find_stars(L, 5.0)
                 found = tstars.keep_stars(found, tstars.star_like(L, found, 1.0))
                 self._spike_angle = tstars.estimate_spike_angle(L, found, 1.0)
             return None if self._spike_angle == "unset" else self._spike_angle

@@ -24,3 +24,10 @@ pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
 cupy-cuda12x==14.2.0
 onnxruntime-directml==1.24.4
+
+# 內含的三個組件：確切版本（==）。它們不在 PyPI 上，雲端從 GitHub 對應的標籤（v<版本>）安裝，這裡的 == 擋版本不符
+# （.github/workflows 的 checkout 標籤從這三行讀；換版本只改這裡）。打包前 build_exe.py 也會對照。
+# 上游打標籤時 .github/workflows/bump-component.yml 會開 PR 改這三行。
+apu-pick==0.9.0
+apu-photons==0.4.0
+apu-processing==0.2.4

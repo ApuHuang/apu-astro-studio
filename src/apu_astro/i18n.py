@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from astro_light_selector import i18n as pick_i18n
 from apu_photons import i18n as photons_i18n
-from apu_processing import i18n as processing_i18n
+from apu_processing.api import i18n as processing_i18n
 
 APP_NAME = "APU Astro"
 APP_SUBTITLE = "Astrophotography Processing Utility"
@@ -67,6 +67,9 @@ _ZH = {
     "update.page": "下載頁面",
     "update.check": "開啟時檢查新版本",
     "update.releases": "打開下載頁面",
+    "about.menu": "關於 APU Astro…",
+    "about.title": "關於",
+    "about.components": "內含的組件：",
     "version.help": "按右鍵：設定要不要檢查新版本、打開下載頁面",
     "err.unexpected": "發生沒預期到的錯誤：\n{error}\n\n詳細內容記在：\n{log}\n回報問題時請附上這個檔案。",
     "err.no_log": "（紀錄檔寫不進去）",
@@ -126,6 +129,9 @@ _EN = {
     "update.page": "download page",
     "update.check": "Check for New Versions at Startup",
     "update.releases": "Open the Download Page",
+    "about.menu": "About APU Astro…",
+    "about.title": "About",
+    "about.components": "Included components:",
     "version.help": "Right-click to turn the new-version check on or off, or open the download page",
     "err.unexpected": "An unexpected error occurred:\n{error}\n\nDetails were saved to:\n{log}\n"
                       "Please attach this file when reporting the problem.",

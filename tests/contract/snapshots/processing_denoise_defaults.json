@@ -1,0 +1,23 @@
+{
+ "__dataclass__": "DenoiseSettings",
+ "amount": 0.5,
+ "chroma_boost": 1.0,
+ "chroma_shrink": "coefficient",
+ "k_chroma": [
+  3.5,
+  3.0,
+  2.5,
+  2.0,
+  1.5
+ ],
+ "k_luminance": [
+  3.0,
+  2.5,
+  2.0,
+  1.5,
+  1.0
+ ],
+ "scale_noise": "octave",
+ "shared_shape": true,
+ "shrink": "neighbour"
+}

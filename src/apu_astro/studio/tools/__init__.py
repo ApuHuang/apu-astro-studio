@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
+from apu_processing import api as papi
 
 from ... import i18n
 from .. import masks, ops
@@ -121,8 +122,8 @@ def record_denoise_ratio(state: State, out: State, layers: list[str], ctx: Ctx) 
         if state.phase.get(name, "linear") != "linear":
             continue
         before, after = ops.planes(state.layers[name]), ops.planes(out.layers[name])
-        nb = ops.measure_noise(before[0] if before.shape[0] == 1 else before, ctx.scale)
-        na = ops.measure_noise(after[0] if after.shape[0] == 1 else after, ctx.scale)
+        nb = papi.measure_stretch_noise(before[0] if before.shape[0] == 1 else before, ctx.scale)
+        na = papi.measure_stretch_noise(after[0] if after.shape[0] == 1 else after, ctx.scale)
         rl = nb.sigma / max(na.sigma, 1e-12)
         rc = [b / max(a, 1e-12) for b, a in zip(nb.channel_sigma, na.channel_sigma)]
         old = out.notes.get(name, {}).get("denoise_ratio")

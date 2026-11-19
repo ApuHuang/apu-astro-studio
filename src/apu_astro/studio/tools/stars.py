@@ -11,7 +11,7 @@ import warnings
 from dataclasses import dataclass
 
 import numpy as np
-from apu_processing import detail as pdetail
+from apu_processing import api as papi
 from scipy import ndimage
 
 from .. import backend, ops
@@ -325,7 +325,7 @@ def halo_spike_mask(L: np.ndarray, stars, scale: float, noise_boost: float = 1.0
 
 def detect_stars(L: np.ndarray, threshold: float):
     """找星：8 px 以下的細結構（starlet 前三層）比「細結構真正的噪聲」亮 threshold 倍的連通區，每一塊一顆
-    （重心用細結構加權），跟 pdetail.find_stars 一樣，差在三個地方：
+    （重心用細結構加權），跟 papi.find_stars 一樣，差在三個地方：
     1. 噪聲：find_stars 用細結構整體的 MAD，降噪後背景的噪聲很小、細結構裡星點反而佔大部分，量到的「噪聲」被星點
        撐大好幾倍（LBN576 AI 降噪後：設 9.4σ，峰值 10～20σ 的星只找到 2%，無星圖上暗星幾乎全留著）。這裡反覆剔掉
        3σ 以外的值（星點），剩下的才是噪聲；AI 留下的紋理也算在噪聲裡，不會被當成星
@@ -333,8 +333,7 @@ def detect_stars(L: np.ndarray, threshold: float):
        （LBN576 一顆 300σ 的星就這樣留在無星圖上）。之後 recenter_stars 拆成一顆顆，星雲纖維由 star_like 擋
     3. mask 是星核的連通區（沒有外擴）：recenter_stars 靠它對應每顆星。find_stars 的 mask 外擴過，相鄰的星連在一起、
        塊數對不上，重新定位整個被跳過（LBN576 2241 顆星只有 1022 塊）"""
-    from apu_processing import denoise as pdenoise
-    _coeffs, smooth = pdenoise.starlet(L, 3)
+    _coeffs, smooth = papi.starlet(L, 3)
     top = L - smooth
     h, w = L.shape
     v = top[:: max(1, h // 512), :: max(1, w // 512)].ravel().astype(np.float64)
@@ -350,7 +349,7 @@ def detect_stars(L: np.ndarray, threshold: float):
     lab, n = ndimage.label(cand)
     if n == 0:
         z = np.zeros(0)
-        return pdetail.Stars(z, z, z, np.zeros(0, bool), np.zeros((h, w), bool), np.zeros((h, w), np.float32))
+        return papi.Stars(z, z, z, np.zeros(0, bool), np.zeros((h, w), bool), np.zeros((h, w), np.float32))
     py, px = np.nonzero(cand)
     li = lab[py, px]
     area = np.bincount(li, minlength=n + 1)[1:]
@@ -370,7 +369,7 @@ def detect_stars(L: np.ndarray, threshold: float):
     mask = keep_lab[lab]
     # 只給 Processing 0.2.1 就有的 6 個欄位（以前多傳了噪聲，那是 Processing 還沒發布的分支才有的欄位，
     # 用公開的 0.2.1 會在這裡出錯；整合版沒有讀它）
-    return pdetail.Stars(ys[ok], xs[ok], np.sqrt(area[ok] / np.pi), sat[ok], mask, mask.astype(np.float32))
+    return papi.Stars(ys[ok], xs[ok], np.sqrt(area[ok] / np.pi), sat[ok], mask, mask.astype(np.float32))
 
 
 def _discs(shape: tuple[int, int], ys: np.ndarray, xs: np.ndarray, radii: np.ndarray) -> np.ndarray:

@@ -8,14 +8,17 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
-from apu_processing.display import IDENTITY, ToneCurves, curve_values
-from apu_processing.i18n import tr as ptr
+from apu_processing.api import IDENTITY_CURVE as IDENTITY
+from apu_processing.api import ToneCurves, curve_values
+from apu_processing.api import i18n as _pi18n
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from .var import Var
 from .widgets import Segmented
+
+ptr = _pi18n.tr
 
 CHANNELS = ("master", "red", "green", "blue")
 CHANNEL_COLOR = {"master": "#ebebeb", "red": "#ff6961", "green": "#7ee081", "blue": "#6ab0ff"}

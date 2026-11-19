@@ -1,0 +1,42 @@
+{
+ "__dict__": [
+  [
+   "group",
+   "A"
+  ],
+  [
+   "is",
+   [
+    true,
+    false
+   ]
+  ],
+  [
+   "outputs",
+   [
+    [
+     {
+      "__path__": "<tmp>/a_Ha.fits"
+     },
+     "Ha",
+     "A",
+     10,
+     null
+    ],
+    [
+     {
+      "__path__": "<tmp>/a_OIII.fits"
+     },
+     "OIII",
+     "A",
+     12,
+     null
+    ]
+   ]
+  ],
+  [
+   "target",
+   "T"
+  ]
+ ]
+}

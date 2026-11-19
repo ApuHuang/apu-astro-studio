@@ -27,21 +27,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: apu-astro-studio
-      # 三個專案用打過標籤的公開版本（跟 Windows 版打包時用的一樣）
+      - name: 組件版本（從 packaging/constraints.txt 讀）
+        id: ver
+        shell: bash
+        run: |
+          C=apu-astro-studio/packaging/constraints.txt
+          for n in pick photons processing; do
+            echo "$n=v$(grep -E "^apu-$n==" $C | cut -d= -f3 | tr -d '\r ')" >> "$GITHUB_OUTPUT"
+          done
+          cat "$GITHUB_OUTPUT"
+      # 三個專案用打過標籤的公開版本（標籤從 packaging/constraints.txt 讀，跟 Windows 版打包時用的一樣）
       - uses: actions/checkout@v4
         with:
           repository: ApuHuang/apu-pick
-          ref: v0.9.0
+          ref: ${{ steps.ver.outputs.pick }}
           path: astro-light-selector
       - uses: actions/checkout@v4
         with:
           repository: ApuHuang/apu-photons
-          ref: v0.3.0
+          ref: ${{ steps.ver.outputs.photons }}
           path: ApuPhotonsUtility
       - uses: actions/checkout@v4
         with:
           repository: ApuHuang/apu-processing
-          ref: v0.2.3
+          ref: ${{ steps.ver.outputs.processing }}
           path: apu-processing
       - uses: actions/setup-python@v5
         with:

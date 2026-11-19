@@ -1,0 +1,49 @@
+{
+ "__dict__": [
+  [
+   "combined",
+   {
+    "__array__": "v.0"
+   }
+  ],
+  [
+   "crop",
+   [
+    16,
+    8,
+    128,
+    96
+   ]
+  ],
+  [
+   "found",
+   {
+    "__path__": "<tmp>/master_coverage.fits"
+   }
+  ],
+  [
+   "fraction",
+   {
+    "__array__": "v.3"
+   }
+  ],
+  [
+   "good",
+   {
+    "__array__": "v.4"
+   }
+  ],
+  [
+   "missing",
+   null
+  ],
+  [
+   "one_missing",
+   null
+  ],
+  [
+   "wrong_shape",
+   null
+  ]
+ ]
+}

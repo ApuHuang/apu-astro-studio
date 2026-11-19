@@ -19,6 +19,7 @@ import threading
 from pathlib import Path
 
 import numpy as np
+from apu_processing import api as papi
 from scipy import ndimage
 
 from .. import backend, ops
@@ -194,9 +195,8 @@ def star_protect(fixed: list[np.ndarray]) -> np.ndarray:
     """星點範圍的權重（星心 1、往外平滑到 0）。AI 對三個色版各自降噪，暗星的輪廓會被修得不一樣，
     星色就偏了（模擬測試：11～19% 的星比加噪的輸入還偏）；星點範圍不修，只修星點之間的背景。
     預設不用：星點周圍留著原本的噪聲、背景乾淨，每顆星像長了一圈噪聲（比星色偏一點更明顯）。"""
-    from apu_processing import detail as pdetail
     L = np.mean(fixed, axis=0)
-    stars = pdetail.find_stars(L, 4.0)
+    stars = papi.find_stars(L, 4.0)
     wgt = ndimage.maximum_filter(stars.weight.astype(np.float32), size=3)
     return ops.blur(wgt, 1.0)
 
@@ -288,7 +288,6 @@ def _coarse_pass(outs: list[np.ndarray], f: int, amount: float, ctx: Ctx | None)
     3. 避開有結構的地方：縮小後暗帶變窄，模型把它當暗的噪聲斑填掉（NGC2244 暗帶模糊 6 px 後 −0.8σ → −0.5σ）。
        在填掉星點的縮小圖上量中尺度（完整尺寸 6 px 對 24 px）的起伏，周圍 12 px 取最大（邊緣正中間是 0），
        超過斑駁典型起伏 COARSE_STRUCT 倍就不改"""
-    from apu_processing import detail as pdetail
 
     from . import stars as tstars
     small = np.stack([_block_mean(x, f) for x in outs]).astype(np.float32)
@@ -296,7 +295,7 @@ def _coarse_pass(outs: list[np.ndarray], f: int, amount: float, ctx: Ctx | None)
     # 只填星核：每顆星自己的範圍（亮度降到噪聲以下為止，暗星 2～6 px）。用星點遮罩（含外圍淡淡的一圈）的話每顆星
     # 周圍 10～16 px 都被填平，模型看不到那裡的斑，密集星場星點旁邊一塊塊沒修到（LBN576）
     Ls = small.mean(axis=0)
-    found = pdetail.find_stars(Ls, 3.0)   # 縮小後暗星的峰值掉得比噪聲多，門檻放低（多填一些沒關係）
+    found = papi.find_stars(Ls, 3.0)   # 縮小後暗星的峰值掉得比噪聲多，門檻放低（多填一些沒關係）
     holes = tstars.star_footprints(Ls, found, float(f), 1.0)[0] if len(found.y) else np.zeros(Ls.shape, bool)
     filled = backend.harmonic_fill(small, holes) if holes.any() else small
     Lf = filled.mean(axis=0)
@@ -398,14 +397,8 @@ def denoise_plane(x: np.ndarray, ctx: Ctx | None = None, tile: int = 640, pad: i
 
 
 def detail_noise(planes: np.ndarray) -> float:
-    """跟 apu_processing.detail.find_stars 一樣的噪聲量法：亮度減掉 starlet 前三層以外的部分，取 MAD。"""
-    from apu_processing import denoise as pdenoise
-    L = planes.mean(axis=0) if planes.shape[0] > 1 else planes[0]
-    _coeffs, smooth = pdenoise.starlet(L, 3)
-    top = L - smooth
-    h, w = L.shape
-    sample = top[:: max(1, h // 512), :: max(1, w // 512)]
-    return 1.4826 * float(np.median(np.abs(sample - np.median(sample))))
+    """找星用的噪聲（apu_processing 的 fine_noise，跟 find_stars 的門檻同單位）；彩色用三色平均的亮度。"""
+    return papi.fine_noise(planes.mean(axis=0) if planes.shape[0] > 1 else planes[0])
 
 
 class AIDenoise(Tool):
@@ -448,8 +441,8 @@ class AIDenoise(Tool):
                 continue
             before = ops.planes(state.layers[name])
             after = ops.planes(out.layers[name])
-            nb = ops.measure_noise(before[0] if before.shape[0] == 1 else before, ctx.scale)
-            na = ops.measure_noise(after[0] if after.shape[0] == 1 else after, ctx.scale)
+            nb = papi.measure_stretch_noise(before[0] if before.shape[0] == 1 else before, ctx.scale)
+            na = papi.measure_stretch_noise(after[0] if after.shape[0] == 1 else after, ctx.scale)
             rl = nb.sigma / max(na.sigma, 1e-12)
             rc = [b / max(a, 1e-12) for b, a in zip(nb.channel_sigma, na.channel_sigma)]
             old = out.notes.get(name, {}).get("noise_ratio")

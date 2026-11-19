@@ -1,0 +1,55 @@
+# 組件（APU Pick、APU Photons、APU Processing）打了新的版本標籤 → 開 PR 把 packaging/constraints.txt 換成新版本，
+# 並在那個分支跑 Tests（Windows、macOS）。
+# 觸發：三個組件 repo 的 notify-studio.yml 打標籤時送 repository_dispatch（要用 PAT，見 README「開發」）；
+# 也可以在 Actions 頁面手動執行。
+# 用 GITHUB_TOKEN 開的 PR 不會自動觸發其他 workflow（GitHub 的限制），所以這裡直接用 workflow_dispatch 啟動 Tests。
+
+name: Bump component
+
+on:
+  repository_dispatch:
+    types: [component-released]
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "組件：apu-pick、apu-photons 或 apu-processing"
+        required: true
+      version:
+        description: "新版本（不加 v，例如 0.2.4）"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    env:
+      COMPONENT: ${{ github.event.client_payload.component || inputs.component }}
+      VERSION: ${{ github.event.client_payload.version || inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 檢查輸入
+        run: |
+          case "$COMPONENT" in apu-pick|apu-photons|apu-processing) ;; *) echo "不認得的組件：$COMPONENT"; exit 1;; esac
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "版本格式不對：$VERSION"; exit 1; }
+      - name: 改 constraints.txt、推分支、開 PR
+        run: |
+          C=packaging/constraints.txt
+          OLD=$(grep -E "^$COMPONENT==" $C | cut -d= -f3 | tr -d '\r ')
+          if [ "$OLD" = "$VERSION" ]; then echo "已經是 $VERSION"; exit 0; fi
+          BRANCH="bump/$COMPONENT-$VERSION"
+          sed -i -E "s/^$COMPONENT==.*/$COMPONENT==$VERSION/" $C
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git commit -am "對接 $COMPONENT $VERSION（原本 $OLD）"
+          git push -f origin "$BRANCH"
+          if ! gh pr view "$BRANCH" >/dev/null 2>&1; then
+            gh pr create --base master --head "$BRANCH" --title "對接 $COMPONENT $VERSION" --body \
+              "$COMPONENT 打了 v$VERSION 標籤，packaging/constraints.txt 從 $OLD 換成 $VERSION。Tests 會在這個分支自動跑（Windows、macOS），通過再合併；行為有變時契約測試（tests/contract）會失敗。"
+          fi
+          gh workflow run test.yml --ref "$BRANCH"

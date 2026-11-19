@@ -12,7 +12,7 @@ def test_catalogs_have_same_keys():
 
 def test_set_language_switches_all_packages():
     from apu_photons import i18n as ph
-    from apu_processing import i18n as pr
+    from apu_processing.api import i18n as pr
     from astro_light_selector import i18n as pk
     i18n.set_language("en")
     try:

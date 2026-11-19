@@ -334,8 +334,8 @@ def test_denoise_keeps_measured_per_scale_noise(monkeypatch):
     """降噪固定用「每個尺度直接量、逐係數收縮」：Processing 0.2.2 起的預設（從 2 px 推算）接在 AI 降噪後面會留色斑。"""
     from apu_astro.studio.tools import noise
     seen = []
-    real = noise.pdenoise.reduce
-    monkeypatch.setattr(noise.pdenoise, "reduce", lambda img, s, cancel: seen.append(s) or real(img, s, cancel))
+    real = noise.papi.reduce_noise
+    monkeypatch.setattr(noise.papi, "reduce_noise", lambda img, s, cancel: seen.append(s) or real(img, s, cancel))
     get("denoise").apply(_star_field(), {"amount": 0.5}, Ctx(1.0), True)
     s = seen[0]
     assert getattr(s, "scale_noise", "measured") == "measured" and getattr(s, "shrink", "coefficient") == "coefficient"
@@ -417,7 +417,7 @@ def test_deconvolution_makes_stars_round_without_donuts():
 def test_deconvolution_leaves_bright_stars_without_ring():
     """很亮的星（星心比背景亮幾千倍噪聲）：變圓那段會振鈴，長軸方向星核外先掉下去再亮起來一圈，拉伸後就是甜甜圈
     （LBN576）。用 Moffat 形狀的橢圓星（高斯星跟反摺積的模型一樣，不會振鈴）：沿長軸往外不准變亮超過 3 倍噪聲。"""
-    from apu_processing import detail as pdetail
+    from apu_processing import api as pdetail
     rng = np.random.default_rng(4)
     h = w = 320
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)

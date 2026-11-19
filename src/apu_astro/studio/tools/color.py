@@ -8,8 +8,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from apu_processing import color as pcolor
-from apu_processing import display
+from apu_processing import api as papi
 from scipy import ndimage
 
 from .. import ops
@@ -52,12 +51,12 @@ class ColorCalibration(Tool):
             key = ("balance", whole.shape)
             bal = ctx.cache.get(key)
             if bal is None:
-                bal = pcolor.measure_balance(whole)
+                bal = papi.measure_balance(whole)
                 ctx.cache[key] = bal
             k = float(params.get("strength", 1.0))
             gains = tuple(1 + (g - 1) * k for g in bal.gains)
             ctx.view["gains"] = gains
-            noise = ops.measure_noise(whole, scale)
+            noise = papi.measure_stretch_noise(whole, scale)
             tops = [max(float(img[c].max()), float(whole[c].max())) for c in range(img.shape[0])]
             out = _apply_gains(out, gains, noise.sky, tops, ctx.scale)
             if whole is not img:
@@ -65,7 +64,7 @@ class ColorCalibration(Tool):
             else:
                 whole = out
         if params.get("neutralize", True):
-            sky = np.asarray(ops.measure_noise(whole, scale).sky, np.float32)
+            sky = np.asarray(papi.measure_stretch_noise(whole, scale).sky, np.float32)
             out = out - (sky - sky.mean())[:, None, None]
         return out.astype(np.float32)
 
@@ -254,12 +253,12 @@ class Curves(Tool):
 
     def apply(self, img: np.ndarray, params: dict, ctx: Ctx, linear: bool) -> np.ndarray:
         c = params.get("curves") or identity_curves()
-        adj = display.DisplayAdjustments(curves=display.ToneCurves(**{k: [list(map(float, q)) for q in v]
+        adj = papi.DisplayAdjustments(curves=papi.ToneCurves(**{k: [list(map(float, q)) for q in v]
                                                                        for k, v in c.items()}))
         if adj.is_neutral():
             return img
         src = np.clip(img, 0, 1)
-        out = display.apply(src[0] if src.shape[0] == 1 else src, adj)
+        out = papi.apply_display(src[0] if src.shape[0] == 1 else src, adj)
         return ops.planes(np.asarray(out, np.float32))
 
 

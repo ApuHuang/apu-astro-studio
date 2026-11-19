@@ -90,17 +90,6 @@ def pixel_noise(plane: np.ndarray) -> float:
     return float(np.median(np.abs(d - np.median(d)))) * 1.4826 / np.sqrt(2)
 
 
-def measure_noise(img: np.ndarray, scale: float):
-    """apu_processing.stretch.measure 的包裝。Processing 0.2.1 在天空區塊（64／倍率）是奇數且 ≥16 px 時
-    reshape 會失敗（例如快速預覽縮小 3 倍 → 21 px，M31 4920×3276 就遇到）；稍微調整倍率讓區塊變成偶數
-    （噪聲尺度的換算差不到 3%）。已寫進 docs/handoff-to-processing.md。"""
-    from apu_processing import stretch as pstretch
-    tile = max(8, int(round(64 / scale)))
-    if tile >= 16 and tile % 2:
-        scale = 64.0 / (tile + 1)
-    return pstretch.measure(img, scale)
-
-
 def auto_display(p: np.ndarray, ref: np.ndarray | None = None) -> np.ndarray:
     """線性影像 → 看得到的 0–1 顯示（只為了顯示，不改資料）。三色各自拉伸（像 PixInsight 的 STF 不連動）：
     彩色相機校色前綠色特別強，連動的話整張偏綠，看不出光害梯度。ref：拉伸參數從這張量（預覽區用整張的縮圖）。"""

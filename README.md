@@ -98,11 +98,28 @@ python -m venv .venv
 .venv\Scripts\python packaging\build_exe.py  # 打包 → dist\APUAstro-<版本>-win64.zip
 ```
 
-需要 APU Pick、APU Photons、APU Processing 三個 repo 放在同一層，用 editable 安裝；Photons 要 0.3 以上
-（打包前會檢查版本）。matplotlib 只是打包時要有（astropy 的打包規則會載入它的繪圖模組），不會包進程式。
+需要 APU Pick、APU Photons、APU Processing 三個 repo 放在同一層，用 editable 安裝，各自切到
+`packaging/constraints.txt` 寫的版本（`apu-pick==…` 那三行；打包前會檢查，版本不一樣就停下來）。
+換過分支或版本後要重新 `pip install -e`，pip 記的版號才會更新。
+matplotlib 只是打包時要有（astropy 的打包規則會載入它的繪圖模組），不會包進程式。
 
 推到 master 和每個 PR 都會在 GitHub 上跑測試（Windows、macOS）。打包與測試用的套件版本鎖在
-`packaging/constraints.txt`（`pip install -c packaging/constraints.txt ...`）。
+`packaging/constraints.txt`（`pip install -c packaging/constraints.txt ...`）；三個組件在雲端從 GitHub 的
+`v<版本>` 標籤安裝，標籤也是從這個檔讀的，換版本只改這裡。
+
+**契約測試**（`tests/contract`）：整合版用到的每個 Pick、Photons、Processing 函式，各用固定的小輸入跑一次跟快照比
+（拉伸後的 8-bit 值差 ≤ 1，線性值相對誤差 ≤ 1e-5），組件行為一變就失敗。確定改變是要的之後更新快照：
+`set APU_UPDATE_SNAPSHOTS=1` 再跑 `pytest tests/contract`。整合版只透過 `apu_processing.api` 使用 Processing。
+
+**組件發新版時自動開 PR**：Pick、Photons、Processing 打 `v*.*.*` 標籤時，它們的 `notify-studio.yml` 通知這個 repo，
+`bump-component.yml` 開 PR 改 `constraints.txt` 並跑測試。Processing 每次 push 也會用新版跑一次這裡的契約測試
+（`studio-contract.yml`，不需要 token）。通知要一個 token：
+
+- 在 GitHub 的 Settings → Developer settings → Fine-grained tokens 產生一個 token：Repository access 只選
+  `ApuHuang/apu-astro-studio`，Permissions 只開 **Contents：Read and write**（送 repository_dispatch 需要的就是這個）
+- 存成 `apu-pick`、`apu-photons`、`apu-processing` 三個 repo 的 Actions secret，名稱 `STUDIO_DISPATCH_TOKEN`
+- **這個 token 會過期**（fine-grained token 最長一年）。過期後組件打標籤時通知那一步會失敗（標籤、Release 不受影響），
+  不會自動開 PR：到同一個頁面重新產生，三個 repo 的 secret 都要更新。可以在 token 的到期日前在行事曆記一下
 
 ## 授權
 

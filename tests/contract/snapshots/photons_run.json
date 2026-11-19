@@ -1,0 +1,56 @@
+{
+ "__dict__": [
+  [
+   "accepted",
+   [
+    "light_000.fits",
+    "light_001.fits",
+    "light_002.fits",
+    "light_003.fits",
+    "light_004.fits",
+    "light_005.fits"
+   ]
+  ],
+  [
+   "masters",
+   {
+    "__dict__": [
+     [
+      "Test_L.fits",
+      {
+       "__array__": "v.1.0"
+      }
+     ]
+    ]
+   }
+  ],
+  [
+   "outputs",
+   [
+    [
+     "TestCam @ 400mm",
+     "L",
+     "out/Test_L.fits",
+     "out/Test_L_coverage.fits",
+     6,
+     []
+    ]
+   ]
+  ],
+  [
+   "recipe",
+   "out/Test.recipe.json"
+  ],
+  [
+   "stages",
+   [
+    "ingest",
+    "masters",
+    "prepare",
+    "register",
+    "integrate",
+    "output"
+   ]
+  ]
+ ]
+}

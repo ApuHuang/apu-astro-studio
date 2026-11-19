@@ -13,7 +13,7 @@ mode：
 from __future__ import annotations
 
 import numpy as np
-from apu_processing import detail
+from apu_processing import api as papi
 from scipy import ndimage
 
 from . import ops
@@ -48,7 +48,7 @@ def rasterize(strokes: list, shape: tuple[int, int], scale: float,
 
 def star_weight(L: np.ndarray, grow: float = 0.0) -> np.ndarray:
     """星點範圍（含星暈，平滑邊緣）；grow 是再往外擴幾 px。"""
-    stars = detail.find_stars(L)
+    stars = papi.find_stars(L)
     w = stars.weight
     if grow > 0.5:
         w = ndimage.maximum_filter(w, size=int(2 * grow + 1))

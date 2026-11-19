@@ -434,7 +434,27 @@ class MainWindow(QMainWindow):
         check.toggled.connect(self.set_update_check)
         menu.addAction(check)
         menu.addAction(tr("update.releases"), lambda: QDesktopServices.openUrl(QUrl(update.RELEASES_URL)))
+        menu.addSeparator()
+        menu.addAction(tr("about.menu"), self.show_about)
         return menu
+
+    def show_about(self) -> None:
+        """關於：整合版與內含三個組件的版號、GitHub 連結。"""
+        from PySide6.QtWidgets import QMessageBox
+
+        from . import components
+        rows = "".join(f"<tr><td>APU {name}</td><td>&nbsp;&nbsp;{v}</td><td>&nbsp;&nbsp;<a href='{url}'>GitHub</a></td></tr>"
+                       for name, v, url in components.versions())
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("about.title"))
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(f"<b>{APP_NAME} {__version__}</b><br><a href='{components.REPO_URL}'>{components.REPO_URL}</a>"
+                    f"<p>{tr('about.components')}</p><table>{rows}</table>")
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.button(QMessageBox.StandardButton.Ok).setText(tr("btn.ok"))
+        self._about = box
+        box.open()
 
     def set_update_check(self, on: bool) -> None:
         save_settings(check_updates=bool(on))

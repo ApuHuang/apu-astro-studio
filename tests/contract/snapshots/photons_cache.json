@@ -1,0 +1,34 @@
+{
+ "__dict__": [
+  [
+   "after",
+   0
+  ],
+  [
+   "before",
+   0
+  ],
+  [
+   "format",
+   [
+    "0 B",
+    "512 B",
+    "3 KB",
+    "5 MB",
+    "7.0 GB"
+   ]
+  ],
+  [
+   "freed_positive",
+   true
+  ],
+  [
+   "path",
+   "out/.photons_cache"
+  ],
+  [
+   "size",
+   3000
+  ]
+ ]
+}

@@ -1,0 +1,20 @@
+{
+ "__dict__": [
+  [
+   "fields",
+   [
+    "y",
+    "x",
+    "radius",
+    "saturated",
+    "mask",
+    "weight",
+    "noise"
+   ]
+  ],
+  [
+   "noise",
+   0.0
+  ]
+ ]
+}

@@ -53,20 +53,32 @@ QT_EXCLUDES = ["PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6
                "PySide6.QtTest", "PySide6.QtWebSockets", "PySide6.QtNetwork"]
 
 
+def pinned_components() -> dict[str, str]:
+    """packaging/constraints.txt 裡三個組件的確切版本 {"apu-pick": "0.9.0", …}。"""
+    out = {}
+    for raw in (ROOT / "packaging" / "constraints.txt").read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        name, sep, version = line.partition("==")
+        if sep and name.strip() in ("apu-pick", "apu-photons", "apu-processing"):
+            out[name.strip()] = version.strip()
+    return out
+
+
 def check_versions() -> None:
-    import apu_photons
-    import apu_processing
-    import astro_light_selector
+    """實際載入的三個組件要跟 constraints.txt 寫的版本完全一樣（不然打包出來的不是測過的組合）。"""
+    from apu_astro import components
 
-    def major_minor(v: str) -> tuple[int, int]:
-        parts = v.split(".")
-        return int(parts[0]), int(parts[1])
-
-    found = {"APU Pick": astro_light_selector.__version__, "APU Photons": apu_photons.__version__,
-             "APU Processing": apu_processing.__version__}
-    print("打包的版本：" + "、".join(f"{k} {v}" for k, v in found.items()))
-    if major_minor(apu_photons.__version__) < (0, 3):
-        raise SystemExit(f"APU Photons 是 {apu_photons.__version__}，整合版要 0.3 以上：請先更新 ApuPhotonsUtility")
+    pinned = pinned_components()
+    print("打包的組件：" + "、".join(f"{n} {v}" for n, v, _u in components.versions()))  # 主控台是 cp950，印不出「・」
+    wrong = []
+    for (name, dist, _module, _url), (_n, found, _u) in zip(components.COMPONENTS, components.versions()):
+        want = pinned.get(dist)
+        if want is None:
+            wrong.append(f"constraints.txt 沒寫 {dist}")
+        elif found != want:
+            wrong.append(f"APU {name} 是 {found}，constraints.txt 要 {want}")
+    if wrong:
+        raise SystemExit("組件版本不符：" + "；".join(wrong) + "。請切到對應的標籤或更新 packaging/constraints.txt")
 
 
 def ensure_not_running(bundle: Path) -> None:

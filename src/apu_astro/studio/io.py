@@ -8,12 +8,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from apu_processing import imageio
+from apu_processing import api as papi
 from astropy.io import fits
 
 from . import xisf
 
-IMAGE_SUFFIXES = {".xisf"} | set(imageio.FITS_SUFFIXES) | {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+IMAGE_SUFFIXES = {".xisf"} | set(papi.FITS_SUFFIXES) | {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
 
 
 def is_image(path: Path) -> bool:
@@ -28,5 +28,5 @@ def load_image(path: Path | str) -> tuple[np.ndarray, fits.Header]:
         if data.ndim == 3 and data.shape[0] == 1:
             data = data[0]
         return np.ascontiguousarray(data, np.float32), img.header()
-    data, header = imageio.load_image(path)
+    data, header = papi.load_image(path)
     return np.ascontiguousarray(data, np.float32), header

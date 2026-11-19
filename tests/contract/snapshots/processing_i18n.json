@@ -1,0 +1,28 @@
+{
+ "__dict__": [
+  [
+   "cancelled_is_exception",
+   true
+  ],
+  [
+   "en",
+   [
+    "en",
+    "RGB",
+    "Red",
+    "Green",
+    "Blue"
+   ]
+  ],
+  [
+   "zh",
+   [
+    "zh",
+    "主控",
+    "紅",
+    "綠",
+    "藍"
+   ]
+  ]
+ ]
+}

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
-from apu_processing import denoise as pdenoise
+from apu_processing import api as papi
 
 from .. import ops
 from . import T, Ctx, State, Tool, record_denoise_ratio, register, slider
@@ -40,13 +40,13 @@ class Denoise(Tool):
         amount = float(params.get("amount", 0.5))
         if amount <= 0:
             return img
-        base = pdenoise.DenoiseSettings()
+        base = papi.DenoiseSettings()
         keep = {k: v for k, v in LEGACY.items() if hasattr(base, k)}   # 0.2.1 以前沒有這些欄位
         s = replace(base, amount=amount, **keep,
                     k_luminance=tuple(k * float(params.get("luminance", 1.0)) for k in base.k_luminance),
                     k_chroma=tuple(k * float(params.get("chroma", 1.0)) for k in base.k_chroma))
         src = img[0] if img.shape[0] == 1 else img
-        out = pdenoise.reduce(src, s, ctx.cancel)
+        out = papi.reduce_noise(src, s, ctx.cancel)
         out = np.asarray(out, np.float32)[None] if img.shape[0] == 1 else np.asarray(out, np.float32)
         return _limit_change(img, out, ctx.scale)
 

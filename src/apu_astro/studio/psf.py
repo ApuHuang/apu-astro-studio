@@ -133,8 +133,8 @@ def measure_stars(L: np.ndarray, max_stars: int = 3000,
                 keep.append(i)
         ys, xs = positions[0][keep], positions[1][keep]
         return ys.astype(float), xs.astype(float), np.array(out_c).reshape(-1, 2, 2)
-    from apu_processing import detail as pdetail
-    stars = pdetail.find_stars(L, 8.0)
+    from apu_processing import api as papi
+    stars = papi.find_stars(L, 8.0)
     if len(stars.y) == 0:
         return np.zeros(0), np.zeros(0), np.zeros((0, 2, 2))
     sat = saturation_mask(L)

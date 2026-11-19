@@ -12,7 +12,7 @@ import dataclasses
 import math
 
 import numpy as np
-from apu_processing import stretch as pstretch
+from apu_processing import api as papi
 
 from .. import ops
 from . import DENOISE_SIGMA_FACTOR, T, Ctx, Tool, choice, register, slider, toggle
@@ -65,7 +65,7 @@ class Stretch(Tool):
         p = img
         whole = ctx.whole(img)       # 拉伸參數從整張量（預覽區時用整張的縮圖）
         if method == "auto":
-            noise = ops.measure_noise(whole[0] if whole.shape[0] == 1 else whole, ctx.whole_scale)
+            noise = papi.measure_stretch_noise(whole[0] if whole.shape[0] == 1 else whole, ctx.whole_scale)
             # 降噪的影響抵銷掉（見 tools/__init__.py 的 DENOISE_SIGMA_FACTOR）：開不開 AI、降噪開多強，
             # 拉伸的深淺都一樣，只是乾不乾淨
             notes = (ctx.ref.notes if ctx.ref is not None else ctx.notes).get(ctx.layer, {})
@@ -75,11 +75,11 @@ class Stretch(Tool):
             # 暗處微弱訊號的量是「差值／噪聲」，跟著換成同一個噪聲（不然背景色、黑點會偏）
             noise = dataclasses.replace(noise, sigma=sl, channel_sigma=sc,
                                         faint_amount=noise.faint_amount * noise.sigma / max(sl, 1e-12))
-            s = pstretch.StretchSettings(background=float(params.get("background", 0.13)),
+            s = papi.StretchSettings(background=float(params.get("background", 0.13)),
                                          strength=float(params.get("strength", 0.5)),
                                          linked=bool(params.get("linked", True)),
                                          background_color=float(params.get("bg_color", 0.5)))
-            out = pstretch.apply(p[0] if p.shape[0] == 1 else p, s, noise)
+            out = papi.apply_stretch(p[0] if p.shape[0] == 1 else p, s, noise)
             return ops.planes(np.asarray(out, np.float32))
         if method == "stf":
             return ops.apply_stf(p, ops.stf_params(whole, float(params.get("stf_target", 0.25))),

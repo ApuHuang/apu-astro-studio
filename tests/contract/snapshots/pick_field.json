@@ -1,0 +1,142 @@
+{
+ "__dict__": [
+  [
+   "avg",
+   {
+    "__dataclass__": "FieldResult",
+    "cells": [
+     [
+      {
+       "__dataclass__": "Cell",
+       "alignment": 0.6510030009070377,
+       "angle": 0.38703227433334303,
+       "eccentricity": 0.11531870580883631,
+       "fwhm": 2.5866471351808595,
+       "n": 15
+      },
+      null,
+      null
+     ],
+     [
+      null,
+      null,
+      null
+     ],
+     [
+      null,
+      null,
+      null
+     ]
+    ],
+    "n_frames": 3,
+    "notes": [
+     "field.note.few_stars"
+    ],
+    "tiles": [
+     [
+      {
+       "__array__": "v.0.tiles.0.0"
+      },
+      {
+       "__array__": "v.0.tiles.0.1"
+      },
+      {
+       "__array__": "v.0.tiles.0.2"
+      }
+     ],
+     [
+      {
+       "__array__": "v.0.tiles.1.0"
+      },
+      {
+       "__array__": "v.0.tiles.1.1"
+      },
+      {
+       "__array__": "v.0.tiles.1.2"
+      }
+     ],
+     [
+      {
+       "__array__": "v.0.tiles.2.0"
+      },
+      {
+       "__array__": "v.0.tiles.2.1"
+      },
+      {
+       "__array__": "v.0.tiles.2.2"
+      }
+     ]
+    ]
+   }
+  ],
+  [
+   "one",
+   {
+    "__dataclass__": "FieldResult",
+    "cells": [
+     [
+      {
+       "__dataclass__": "Cell",
+       "alignment": 0.8321916257265592,
+       "angle": -0.1749509159183701,
+       "eccentricity": 0.11811362051192516,
+       "fwhm": 2.587706837638173,
+       "n": 5
+      },
+      null,
+      null
+     ],
+     [
+      null,
+      null,
+      null
+     ],
+     [
+      null,
+      null,
+      null
+     ]
+    ],
+    "n_frames": 1,
+    "notes": [
+     "field.note.few_stars"
+    ],
+    "tiles": [
+     [
+      {
+       "__array__": "v.1.tiles.0.0"
+      },
+      {
+       "__array__": "v.1.tiles.0.1"
+      },
+      {
+       "__array__": "v.1.tiles.0.2"
+      }
+     ],
+     [
+      {
+       "__array__": "v.1.tiles.1.0"
+      },
+      {
+       "__array__": "v.1.tiles.1.1"
+      },
+      {
+       "__array__": "v.1.tiles.1.2"
+      }
+     ],
+     [
+      {
+       "__array__": "v.1.tiles.2.0"
+      },
+      {
+       "__array__": "v.1.tiles.2.1"
+      },
+      {
+       "__array__": "v.1.tiles.2.2"
+      }
+     ]
+    ]
+   }
+  ]
+ ]
+}
