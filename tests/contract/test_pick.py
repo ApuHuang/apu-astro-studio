@@ -141,7 +141,8 @@ def test_preview(measured):
     thumb = thumbnail(p, 120, 90)
     cu = closeup(p, 0.5, 0.5, 40, 2)
     check("pick_preview", {"preview": {**{f: getattr(p, f) for f in Preview.__dataclass_fields__ if f != "image"},
-                                       "image": Display(p.image)},
+                                       "image": Display(p.image),
+                                       "image_float": np.asarray(p.image, np.float32)},
                            "thumb": Display(np.asarray(thumb, np.float32) / 255),
                            "closeup": Display(np.asarray(cu, np.float32) / 255)})
 

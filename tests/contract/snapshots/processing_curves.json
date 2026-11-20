@@ -126,15 +126,27 @@
    }
   ],
   [
+   "mono_float",
+   {
+    "__array__": "v.3"
+   }
+  ],
+  [
    "rgb",
    {
-    "__display__": "v.3"
+    "__display__": "v.4"
+   }
+  ],
+  [
+   "rgb_float",
+   {
+    "__array__": "v.5"
    }
   ],
   [
    "values",
    {
-    "__array__": "v.4"
+    "__array__": "v.6"
    }
   ]
  ]

@@ -74,7 +74,8 @@ def test_master_display():
     img = star_field(200, 260, seed=5)
     step = 1
     disp = np.stack([apply_stretch(c, stretch_params(np.asarray(c[::step, ::step], np.float32))) for c in img])
-    check("photons_master_display", {"params": [stretch_params(c) for c in img], "display": Display(disp)})
+    check("photons_master_display", {"params": [stretch_params(c) for c in img], "display": Display(disp),
+                                     "float": np.asarray(disp, np.float32)})
 
 
 def test_backend():

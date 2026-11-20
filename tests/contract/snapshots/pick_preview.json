@@ -41,6 +41,12 @@
       }
      ],
      [
+      "image_float",
+      {
+       "__array__": "v.1.5"
+      }
+     ],
+     [
       "info",
       {
        "__dict__": [
@@ -138,13 +144,13 @@
      [
       "stretched_hist",
       {
-       "__array__": "v.1.9"
+       "__array__": "v.1.10"
       }
      ],
      [
       "stretched_lum",
       {
-       "__array__": "v.1.10"
+       "__array__": "v.1.11"
       }
      ]
     ]

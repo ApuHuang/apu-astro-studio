@@ -168,8 +168,11 @@ def test_apply_stretch(img):
     out = {}
     for bg, strength, linked, bgc in ((0.13, 0.5, True, 0.5), (0.2, 0.8, False, 0.0)):
         s = papi.StretchSettings(background=bg, strength=strength, linked=linked, background_color=bgc)
-        out[f"{bg}_{strength}_{linked}"] = Display(papi.apply_stretch(big, s, noise))
-    out["mono"] = Display(papi.apply_stretch(big[0], papi.StretchSettings(), papi.measure_stretch_noise(big[0])))
+        v = papi.apply_stretch(big, s, noise)
+        # 8-bit 差 ≤ 1 抓不到小改變（拉伸常數改 1% 只差 1 階）：另外存一份浮點值，用相對誤差 1e-5 比
+        out[f"{bg}_{strength}_{linked}"] = {"display": Display(v), "float": np.asarray(v, np.float32)}
+    v = papi.apply_stretch(big[0], papi.StretchSettings(), papi.measure_stretch_noise(big[0]))
+    out["mono"] = {"display": Display(v), "float": np.asarray(v, np.float32)}
     check("processing_apply_stretch", out)
 
 
@@ -192,6 +195,8 @@ def test_curves(img):
                                 "values": papi.curve_values(curves["master"], xs),
                                 "rgb": Display(papi.apply_display(disp, adj)),
                                 "mono": Display(papi.apply_display(disp[0], adj)),
+                                "rgb_float": np.asarray(papi.apply_display(disp, adj), np.float32),
+                                "mono_float": np.asarray(papi.apply_display(disp[0], adj), np.float32),
                                 "default_curves": papi.ToneCurves()})
 
 
