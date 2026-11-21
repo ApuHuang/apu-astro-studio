@@ -18,5 +18,5 @@ def versions() -> list[tuple[str, str, str]]:
 
 
 def line() -> str:
-    """一行文字，例如「Pick 0.9.0・Photons 0.4.0・Processing 0.2.4」（Release 說明、關於對話框用）。"""
+    """一行文字，例如「Pick 0.9.0・Photons 0.4.1・Processing 0.2.4」（Release 說明、關於對話框用）。"""
     return "・".join(f"{name} {v}" for name, v, _url in versions())

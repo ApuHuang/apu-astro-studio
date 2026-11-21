@@ -29,5 +29,5 @@ onnxruntime-directml==1.24.4
 # （.github/workflows 的 checkout 標籤從這三行讀；換版本只改這裡）。打包前 build_exe.py 也會對照。
 # 上游打標籤時 .github/workflows/bump-component.yml 會開 PR 改這三行。
 apu-pick==0.9.0
-apu-photons==0.4.0
+apu-photons==0.4.1
 apu-processing==0.2.4

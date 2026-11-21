@@ -3,7 +3,7 @@
 容許誤差（使用者 2026-11-19 訂的）：
 - 拉伸後的顯示影像（用 Display() 包起來的 0–1 影像）：換成 8-bit 後每個像素相差 ≤ 1
 - 線性值（其他浮點數、浮點陣列）：相對誤差 ≤ 1e-5（跨平台／不同 CPU 超過的項目放寬到 1e-4，check 的 rel 參數，
-  只放寬那一項；不維護 macOS 專用的快照）；接近 0 的值，下限是整個陣列最大值的 1e-7
+  只放寬那一項；不維護 macOS 專用的快照）；接近 0 的值，下限是整個陣列最大值的 1e-7（check 的 floor 參數）
   （不然相對誤差在 0 附近沒有意義：0.0 對 1e-12 會是無限大）
 - 整數、布林、字串、None：完全一樣
 
@@ -25,8 +25,9 @@ import numpy as np
 SNAP_DIR = Path(__file__).with_name("snapshots")
 UPDATE = os.environ.get("APU_UPDATE_SNAPSHOTS") == "1"
 REL = 1e-5
-_rel = [REL]          # 這一次 check 用的相對誤差（個別項目可以放寬）
 FLOOR = 1e-7
+_rel = [REL]          # 這一次 check 用的相對誤差（個別項目可以放寬）
+_floor = [FLOOR]      # 這一次 check 的下限（陣列最大值的倍數）
 
 
 class Display:
@@ -90,7 +91,7 @@ class _Norm:
 
 
 def _close(a: float, b: float, peak: float = 0.0) -> bool:
-    return abs(a - b) <= max(_rel[0] * abs(b), FLOOR * peak, 1e-12)
+    return abs(a - b) <= max(_rel[0] * abs(b), _floor[0] * peak, 1e-12)
 
 
 def _compare(got, want, ga: dict, wa: dict, where: str, errors: list[str]) -> None:
@@ -119,11 +120,13 @@ def _compare(got, want, ga: dict, wa: dict, where: str, errors: list[str]) -> No
             same_nan = np.array_equal(np.isnan(g64), np.isnan(w64))
             ok = np.isfinite(w64)
             peak = float(np.max(np.abs(w64[ok]))) if ok.any() else 0.0
-            tol = np.maximum(_rel[0] * np.abs(w64), FLOOR * peak)
+            tol = np.maximum(_rel[0] * np.abs(w64), _floor[0] * peak)
             bad = ok & ~(np.abs(g64 - w64) <= tol)
             if not same_nan or bad.any():
-                rel = float(np.max(np.abs(g64 - w64)[ok] / np.maximum(np.abs(w64[ok]), FLOOR * peak + 1e-300)))
-                errors.append(f"{where}: {int(bad.sum())} 個值超過容許誤差（最大相對差 {rel:.3g}）")
+                diff = np.abs(g64 - w64)[ok]
+                rel = float(np.max(diff / np.maximum(np.abs(w64[ok]), FLOOR * peak + 1e-300)))
+                errors.append(f"{where}: {int(bad.sum())} 個值超過容許誤差（最大相對差 {rel:.3g}、"
+                              f"最大差是峰值的 {float(diff.max()) / (peak or 1.0):.3g}）")
         elif not np.array_equal(g, w):
             errors.append(f"{where}: {int((g != w).sum())} 個值不同")
         return
@@ -149,8 +152,9 @@ def _compare(got, want, ga: dict, wa: dict, where: str, errors: list[str]) -> No
         errors.append(f"{where}: {got!r} ≠ {want!r}")
 
 
-def check(name: str, value, root: Path | None = None, rel: float = REL) -> None:
-    """跟 snapshots/<name>.json（＋ .npz）比；APU_UPDATE_SNAPSHOTS=1 時改寫快照。"""
+def check(name: str, value, root: Path | None = None, rel: float = REL, floor: float = FLOOR) -> None:
+    """跟 snapshots/<name>.json（＋ .npz）比；APU_UPDATE_SNAPSHOTS=1 時改寫快照。
+    rel：相對誤差；floor：陣列的下限＝陣列最大值 × floor（floor=1e-3 就是「每個值差 ≤ 峰值的 1e-3」）。"""
     norm = _Norm(root)
     tree = norm(value)
     js, nz = SNAP_DIR / f"{name}.json", SNAP_DIR / f"{name}.npz"
@@ -167,9 +171,9 @@ def check(name: str, value, root: Path | None = None, rel: float = REL) -> None:
     wa = dict(np.load(nz, allow_pickle=False)) if nz.exists() else {}
     got = json.loads(json.dumps(tree))       # 跟存檔一樣走一次 JSON（tuple → list）
     errors: list[str] = []
-    _rel[0] = rel
+    _rel[0], _floor[0] = rel, floor
     try:
         _compare(got, want, norm.arrays, wa, name, errors)
     finally:
-        _rel[0] = REL
+        _rel[0], _floor[0] = REL, FLOOR
     assert not errors, "組件行為跟快照不同：\n" + "\n".join(errors[:20])

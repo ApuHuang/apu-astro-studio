@@ -26,7 +26,14 @@ from apu_photons.recipe import RecipeError, load_recipe
 from astropy.io import fits
 
 from .data import star_field, write_frames
-from .snap import Display, check
+from .snap import REL, Display, check
+
+# 跨平台（macOS ARM 對 Windows x86）的數值容許誤差（使用者 2026-11-21）：離散的決定兩邊都要完全一樣，
+# 數值在 Windows 用 1e-5；macOS 的 master 每個像素差 ≤ 峰值的 1e-3，背景、權重、變換、FWHM 相對 2e-3。
+# 原因：ARM 與 x86 浮點最後幾位不同，被 Background2D 的 sigma clipping、FWHM 疊代（收斂門檻 1e-3）放大
+MAC = sys.platform == "darwin"
+NUM_REL = 2e-3 if MAC else REL
+MASTER_FLOOR = 1e-3 if MAC else 1e-7
 
 # 疊圖頁 _plan 傳給 ingest 的參數（預設值）
 PLAN_ARGS = dict(kinds={}, filter_aliases={}, temp_tolerance=2.0, split_nights=True, flat_any_night=False,
@@ -73,17 +80,13 @@ def stacked(frames, tmp_path_factory):
                   cancel=threading.Event())
     finally:
         photons_engine._rank_frames, photons_engine.register_many = real_rank, real_reg
+    _collect_diag(res, diag)
     _save_diag(res, diag)
-    return res, stages, folder.parent
+    return res, stages, folder.parent, diag
 
 
-def _save_diag(res, diag: dict) -> None:
-    """APU_CONTRACT_ARTIFACTS 有設時（雲端），把疊圖的過程與結果存下來給 workflow 上傳，比較不同平台為什麼結果不同。"""
-    dest = os.environ.get("APU_CONTRACT_ARTIFACTS")
-    if not dest:
-        return
-    dest = Path(dest) / "photons_run"
-    dest.mkdir(parents=True, exist_ok=True)
+def _collect_diag(res, diag: dict) -> None:
+    """疊圖過程的決定與量測（兩層比對用；雲端也存成 artifact）。"""
     diag["platform"] = {"machine": platform.machine(), "system": platform.system(), "python": sys.version,
                         "numpy": np.__version__}
     diag["files_order"] = [f.name for f in res.project.files]
@@ -94,8 +97,19 @@ def _save_diag(res, diag: dict) -> None:
                        "weight": f.weight, "rejected_pixel_fraction": f.rejected_pixel_fraction,
                        "rejected_pixels": None if f.rejected_pixel_fraction is None or not f.shape
                        else round(f.rejected_pixel_fraction * f.shape[0] * f.shape[1]),
+                       "fwhm": None if f.stars is None else float(f.stars.fwhm),
+                       "background": None if f.stars is None else float(f.stars.background),
                        "norm": f.norm and {k: v for k, v in f.norm.items() if k in ("scale", "offset")}}
                       for f in res.project.files if f.kind == "light"]
+
+
+def _save_diag(res, diag: dict) -> None:
+    """APU_CONTRACT_ARTIFACTS 有設時（雲端），把疊圖的過程與結果存下來給 workflow 上傳，比較不同平台為什麼結果不同。"""
+    dest = os.environ.get("APU_CONTRACT_ARTIFACTS")
+    if not dest:
+        return
+    dest = Path(dest) / "photons_run"
+    dest.mkdir(parents=True, exist_ok=True)
     (dest / "diag.json").write_text(json.dumps(diag, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     for o in res.outputs:
         shutil.copy(o.output, dest / o.output.name)
@@ -177,12 +191,32 @@ def test_ingest(frames):
     })
 
 
-@pytest.mark.xfail(sys.platform == "darwin", strict=True,
-                   reason="ARM 與 x86 的浮點差異：輸入順序、參考張、配對星數、排除像素數都一樣，但 Background2D 的 "
-                          "sigma clipping 與 FWHM 疊代（收斂門檻 1e-3）讓背景、FWHM 差相對 5e-4～1e-3，權重與對齊跟著變，"
-                          "master 中位數差 0.03 ADU、星核最大 42 ADU（峰值 4.2 萬）。容許誤差怎麼訂待使用者決定")
+def test_run_decisions(stacked):
+    """第一層：離散的決定，每個平台都要完全一樣（輸入順序、參考張、各張偵測／配對到的星數、排除的像素數、收了哪幾張）。"""
+    res, _stages, _root, diag = stacked
+    frames = diag["frames"]
+    check("photons_run_decisions", {
+        "files_order": diag["files_order"],
+        "references": diag["references"],
+        "detected_stars": {f["name"]: f["n_stars"] for f in frames},
+        "matched_stars": [r["lengths"][1] if r["ok"] else None for r in diag["register"]],
+        "rejected_pixels": {f["name"]: f["rejected_pixels"] for f in frames},
+        "accepted": {f["name"]: f["accepted"] for f in frames},
+    })
+
+
+def test_run_numbers(stacked):
+    """第二層之一：各張的浮點量測（背景、權重、對齊變換、FWHM）。"""
+    res, _stages, _root, diag = stacked
+    check("photons_run_numbers", {f["name"]: {"fwhm": f["fwhm"], "background": f["background"], "weight": f["weight"],
+                                              "transform": None if f["transform"] is None
+                                              else np.asarray(f["transform"], np.float64)}
+                                  for f in diag["frames"]}, rel=NUM_REL)
+
+
 def test_run(stacked):
-    res, stages, root = stacked
+    """第二層之二：輸出的 master（macOS 每個像素差 ≤ 峰值的 1e-3）與輸出清單。"""
+    res, stages, root, _diag = stacked
     assert isinstance(res, Result)
     masters = {}
     for o in res.outputs:
@@ -196,11 +230,11 @@ def test_run(stacked):
         "recipe": res.recipe.relative_to(root).as_posix(),
         "masters": masters,
         "accepted": sorted(f.path.name for o in res.outputs for f in o.frames),
-    })
+    }, floor=MASTER_FLOOR)
 
 
 def test_load_recipe(stacked):
-    res, _stages, root = stacked
+    res, _stages, root, _diag = stacked
     out = {}
     for reproduce in (False, True):
         rec = load_recipe(res.recipe, reproduce=reproduce, base=Settings(gpu="cpu", workers=1))
