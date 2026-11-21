@@ -469,8 +469,8 @@ class AIDenoise(Tool):
         units = []
         for c in range(img.shape[0]):
             sky, sig = sky_sigma(img[c])
-            if whole is not img:     # 預覽區：天空從整張量；噪聲是完整解析度的，用這一塊自己量
-                sky = float(np.median(whole[c][:: 2, :: 2]))
+            if whole is not img:     # 天空從快速層的整張量；噪聲是這個解析度的，用自己量
+                sky = ctx.stat(("sky", ctx.layer, c), lambda c=c: float(np.median(whole[c][:: 2, :: 2])))
             units.append((sky, sig))
         # 縮小再跑的那層：快速預覽本身已經縮小（一個像素＝完整尺寸 4 px），斑駁在快速預覽上就是細顆粒，不用再跑
         # 色彩降噪也只在完整解析度做（快速預覽縮小時色彩噪聲已經平均掉了）

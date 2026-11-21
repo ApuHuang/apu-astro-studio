@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 from numpy.polynomial import legendre
 from scipy import ndimage
@@ -126,11 +128,17 @@ class Gradient(Tool):
     def apply(self, img: np.ndarray, params: dict, ctx: Ctx, linear: bool) -> np.ndarray:
         C, h, w = img.shape
         if ctx.ref is not None:
-            # 預覽區：背景面用整張（縮圖）擬合，再取這一塊的位置
+            # 互動層、完整解析度、預覽區：背景面用快速層擬合（依輸入與參數快取），再取這一塊的位置
             whole = ctx.whole(img)
-            surfaces_w = self._fit(whole, params, ctx.whole_scale, ctx, view=False)
+            fit_key = json.dumps({k: v for k, v in params.items() if k not in ("view", "brush", "mode")},
+                                 sort_keys=True, default=str)
+            fitted = ctx.stat(("fit", ctx.layer, fit_key), lambda: self._fit_views(whole, params, ctx))
+            surfaces_w, views = fitted
             if surfaces_w is None:
                 return img
+            if ctx.region is None:
+                ctx.view["sky_cells"] = views.get("sky_cells")
+                ctx.view["sky_cells_scale"] = ctx.whole_scale
             f = ctx.whole_scale
             ox, oy = ctx.origin
             ys = np.clip((oy + np.arange(h) + 0.5) / f - 0.5, 0, surfaces_w.shape[1] - 1)
@@ -146,9 +154,20 @@ class Gradient(Tool):
         if params.get("mode") == "divide":
             return (img / np.maximum(surfaces / np.maximum(med, 1e-9), 1e-3)).astype(np.float32)
         removed = surfaces - med
-        if ctx.ref is None:
+        if ctx.region is None:
             ctx.view["removed"] = removed
+            ctx.view["model"] = surfaces
         return (img - removed).astype(np.float32)
+
+    def _fit_views(self, img: np.ndarray, params: dict, ctx: Ctx) -> tuple[np.ndarray | None, dict]:
+        """快速層擬合；連同取樣格（給介面看）一起記住。"""
+        saved = ctx.view
+        ctx.view = {}
+        try:
+            surfaces = self._fit(img, params, ctx.whole_scale, ctx, view=True)
+            return surfaces, {"sky_cells": ctx.view.get("sky_cells")}
+        finally:
+            ctx.view = saved
 
     def _fit(self, img: np.ndarray, params: dict, scale: float, ctx: Ctx, view: bool) -> np.ndarray | None:
         """取樣、擬合，回傳跟 img 一樣大的背景面 (C, h, w)；取不到樣時 None。"""

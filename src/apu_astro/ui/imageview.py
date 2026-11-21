@@ -61,6 +61,7 @@ def to_qimage(planes: np.ndarray) -> QImage:
 
 class ImageView(QWidget):
     zoom_changed = Signal(float)
+    view_changed = Signal()               # 縮放或平移（可見範圍變了）
     crop_changed = Signal()
     hovered = Signal(float, float)        # 完整尺寸的座標；離開影像時 (-1, -1)
     stroke = Signal(float, float, float, bool)   # 筆刷：(x, y, 半徑, 加或擦)，完整尺寸的座標
@@ -113,6 +114,7 @@ class ImageView(QWidget):
         self._inset_rev = 0
         self._cache_inset: tuple[tuple, QImage, QRectF] | None = None
         self._cache_inset_cmp: tuple[tuple, QImage, QRectF] | None = None
+        self.busy_text: str | None = None           # 重算中：角落的小標籤（畫面保留上一張）
 
     # ------------------------------------------------------------------ 工具與疊色
 
@@ -142,6 +144,25 @@ class ImageView(QWidget):
         self.overlay = img
         self.overlay_rect = (w * pixel_scale, h * pixel_scale)
         self.update()
+
+    def set_busy(self, text: str | None) -> None:
+        """重算中：右下角顯示小小的進度（例如「預覽 40%」）；None 拿掉。畫面不清空。"""
+        if text != self.busy_text:
+            self.busy_text = text
+            self.update()
+
+    def visible_box(self) -> tuple[float, float, float, float] | None:
+        """畫面上看得到的範圍（完整尺寸的座標 x0, y0, x1, y1，夾在影像內）。"""
+        if self.full is None:
+            return None
+        w, h = self.full_size()
+        a = self.to_image(QPointF(0, 0))
+        b = self.to_image(QPointF(self.width(), self.height()))
+        x0, y0 = max(0.0, a[0]), max(0.0, a[1])
+        x1, y1 = min(w, b[0]), min(h, b[1])
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, y0, x1, y1
 
     def set_inset(self, image: np.ndarray | None, pos: tuple[float, float] = (0.0, 0.0),
                   compare: np.ndarray | None = None, stale: bool = False) -> None:
@@ -275,6 +296,7 @@ class ImageView(QWidget):
 
     def _emit_zoom(self) -> None:
         self.zoom_changed.emit(self.current_zoom() * self.devicePixelRatioF())
+        self.view_changed.emit()
 
     def _clamp_center(self) -> None:
         w, h = self.full_size()
@@ -373,6 +395,8 @@ class ImageView(QWidget):
             p.drawImage(QRectF(self.to_screen(0, 0), self.to_screen(ow, oh)), self.overlay)
         if self.crop_mode or self.crop_box is not None:
             self._paint_crop(p)
+        if self.busy_text:
+            self._paint_busy(p)
         if self.tool == "brush" and self._mouse.x() >= 0:
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             r = self.brush_radius * self.current_zoom()
@@ -430,6 +454,23 @@ class ImageView(QWidget):
             p.drawRoundedRect(r, 6, 6)
             p.setPen(QColor("white"))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _paint_busy(self, p: QPainter) -> None:
+        """右下角的小標籤：重算中（畫面是上一張，不清空）。"""
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(fonts().ui(8.5))
+        text = self.busy_text
+        tw = p.fontMetrics().horizontalAdvance(text) + 26
+        r = QRectF(self.width() - tw - 10, self.height() - 30, tw, 20)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 150))
+        p.drawRoundedRect(r, 10, 10)
+        p.setBrush(QColor("#ffcc44"))
+        p.drawEllipse(QPointF(r.left() + 10, r.center().y()), 3.2, 3.2)
+        p.setPen(QColor(255, 255, 255, 220))
+        p.drawText(r.adjusted(18, 0, -6, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        p.restore()
 
     def _paint_inset_frame(self, p: QPainter) -> None:
         """預覽區的外框：白色細線；正在重算時是黃色虛線。"""
@@ -548,6 +589,7 @@ class ImageView(QWidget):
                 self._clamp_center()
                 self._touch()
                 self.update()
+                self.view_changed.emit()
             return
         if self._crop_start is not None:
             fx, fy = self.to_image(pos)

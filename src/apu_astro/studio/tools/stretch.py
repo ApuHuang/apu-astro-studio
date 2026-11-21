@@ -20,6 +20,7 @@ from . import DENOISE_SIGMA_FACTOR, T, Ctx, Tool, choice, register, slider, togg
 
 class Stretch(Tool):
     kind = "stretch"
+    cost = "cheap"
     title = T("拉伸", "Stretch")
     help = T("把線性的影像拉成看得到的亮度。無星圖用「自動」或「GHS」，星點層用「保色」。拉伸之後才能調色、做曲線。",
              "Turns linear data into a visible image. Use Auto or GHS for the starless layer and Colour-preserving "
@@ -64,8 +65,10 @@ class Stretch(Tool):
         method = params.get("method", "auto")
         p = img
         whole = ctx.whole(img)       # 拉伸參數從整張量（預覽區時用整張的縮圖）
+        lay = ctx.layer
         if method == "auto":
-            noise = papi.measure_stretch_noise(whole[0] if whole.shape[0] == 1 else whole, ctx.whole_scale)
+            noise = ctx.stat(("stretch_noise", lay), lambda: papi.measure_stretch_noise(
+                whole[0] if whole.shape[0] == 1 else whole, ctx.whole_scale))
             # 降噪的影響抵銷掉（見 tools/__init__.py 的 DENOISE_SIGMA_FACTOR）：開不開 AI、降噪開多強，
             # 拉伸的深淺都一樣，只是乾不乾淨
             notes = (ctx.ref.notes if ctx.ref is not None else ctx.notes).get(ctx.layer, {})
@@ -82,19 +85,23 @@ class Stretch(Tool):
             out = papi.apply_stretch(p[0] if p.shape[0] == 1 else p, s, noise)
             return ops.planes(np.asarray(out, np.float32))
         if method == "stf":
-            return ops.apply_stf(p, ops.stf_params(whole, float(params.get("stf_target", 0.25))),
+            target = float(params.get("stf_target", 0.25))
+            return ops.apply_stf(p, ctx.stat(("stf", lay, target), lambda: ops.stf_params(whole, target)),
                                  linked=bool(params.get("linked", True)))
-        L = ops.luminance(whole)
-        med, mad = ops.robust_stats(L)
+        med, mad = ctx.stat(("robust_L", lay), lambda: ops.robust_stats(ops.luminance(whole)))
         black = max(0.0, med - 2.8 * mad)
         if method == "arcsinh":
-            chans = [max(0.0, ops.robust_stats(c)[0] - 2.8 * ops.robust_stats(c)[1]) for c in whole]
+            chans = ctx.stat(("arcsinh_black", lay), lambda: [
+                max(0.0, ops.robust_stats(c)[0] - 2.8 * ops.robust_stats(c)[1]) for c in whole])
             # 拉伸量滑桿：1～400 → β 1～2e5（線性資料的星點層數值很小）
             beta = 10 ** (math.log10(max(1.0, float(params.get("beta", 60)))) * 1.3 + 0.5)
             return ops.arcsinh_stretch(p, beta, chans)
         # GHS
-        Lw = np.clip((L - black) / max(1 - black, 1e-6), 0, 1)
-        sp = float(np.median(Lw[:: 4, :: 4])) if params.get("ghs_sp_auto", True) else float(params.get("ghs_sp", 0))
+        def auto_sp() -> float:
+            Lw = np.clip((ops.luminance(whole) - black) / max(1 - black, 1e-6), 0, 1)
+            return float(np.median(Lw[:: 4, :: 4]))
+
+        sp = ctx.stat(("ghs_sp", lay), auto_sp) if params.get("ghs_sp_auto", True) else float(params.get("ghs_sp", 0))
         ctx.view["ghs_sp"] = sp
         x = np.clip((p - black) / max(1 - black, 1e-6), 0, 1)
         Ln = np.clip((ops.luminance(p) - black) / max(1 - black, 1e-6), 0, 1)

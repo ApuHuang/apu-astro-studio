@@ -98,6 +98,7 @@ def region_apply(op: tuple, p: np.ndarray, region: dict) -> tuple[np.ndarray, di
 
 class Geometry(Tool):
     kind = "geometry"
+    cost = "cheap"
     title = T("裁切與旋轉", "Crop & Rotate")
     help = T("在畫面上拖曳畫出裁切框；疊圖邊緣覆蓋不足的地方建議裁掉，去光梯度會更準。",
              "Drag on the image to draw the crop. Cropping the poorly covered stacking edges helps gradient removal.")

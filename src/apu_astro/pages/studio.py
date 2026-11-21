@@ -1,7 +1,9 @@
 """後製工作室（整合版的第三步「後製」）：可以回頭修改的步驟鏈。
 
 左邊步驟清單、中間影像（結果／對照前後／遮罩；去星後可以只看無星圖或星點層）、右邊這一步的設定（依工具自動產生）。
-改任何設定：先用縮小的影像即時預覽，停手後背景算完整解析度；只重算改到的那一步之後。
+改任何設定：拖曳中每 THROTTLE_MS 用互動層（快速層再縮小 2 倍）更新一次（throttle，不是等停手），放手用快速層，
+停手後背景算完整解析度（放大到 AUTO_REGION_ZOOM 以上時只算看得到的那一塊）；只重算改到的那一步之後。
+重算時畫面保留上一張，右下角只顯示小小的進度。
 """
 
 from __future__ import annotations
@@ -36,6 +38,12 @@ from .base import Page
 from .studio_steps import StepPanel
 
 PROJECT_SUFFIX = ".apuastro"
+THROTTLE_MS = 90            # 拖曳中互動層最快多久更新一次
+RELEASE_MS = 180            # 停止操作多久算「放手」（改用快速層）
+AUTO_REGION_ZOOM = 0.5      # 放大到這個倍率以上（裝置像素／完整尺寸像素），看得到的範圍自動當成預覽區
+AUTO_REGION_PART = 0.6      # 而且只看得到整張的一部分（小影像整張都看得到時算完整解析度就好）
+RES_LABEL = {"inter": T("互動", "Live"), "quick": T("預覽", "Preview"), "full": T("完整", "Full"),
+             "region": T("預覽區", "Area")}
 OPEN_FILTER = "影像 Images (*.xisf *.fit *.fits *.fts *.tif *.tiff *.png *.recipe.json *.apuastro);;* (*)"
 MASK_MODES = [("all", T("整張", "Whole image")), ("bright", T("亮部", "Bright areas")), ("dark", T("暗部", "Dark areas")),
               ("range", T("亮度範圍", "Brightness range")), ("stars", T("星點", "Stars")),
@@ -73,7 +81,12 @@ class StudioPage(Page):
         self._hover_text = ""
         self._tool_mode: str | None = None       # brush_exclude／brush_mask／pick_sel／pick_mask／crop／region
         self.bridge = Bridge(self._handle, self)
-        self._quick_timer = delayed(self, 180, lambda: self._request("quick"))
+        self._quick_timer = delayed(self, RELEASE_MS, lambda: self._request("quick"))
+        self._inter_timer = delayed(self, THROTTLE_MS, self._start_inter)
+        self._inter_pending = False
+        self._inter_started = 0.0
+        self._view_timer = delayed(self, 300, self._auto_region)
+        self._region_auto = False                # 預覽區是放大時自動設的（不是使用者框的）
         self._full_timer = delayed(self, 650, lambda: self._request(self.chain.region_res() or "full"))
         self._region_timer = delayed(self, 250, lambda: self._request(self.chain.region_res() or "full"))
         self._inset: tuple | None = None         # 最後一次顯示的預覽區 (步驟, 圖層, 影像, 位置)
@@ -131,6 +144,7 @@ class StudioPage(Page):
         self.image = ImageView()
         self.image.hovered.connect(self._hovered)
         self.image.zoom_changed.connect(lambda _z: self._refresh_summary())
+        self.image.view_changed.connect(lambda: self._view_timer.start())
         self.image.stroke.connect(self._stroke)
         self.image.stroke_done.connect(self._stroke_done)
         self.image.picked.connect(self._picked)
@@ -226,6 +240,7 @@ class StudioPage(Page):
         self.loading = False
         self.chain.set_source(src)
         self.chain.set_region(None)
+        self._region_auto = False
         self._inset = None
         self._sync_region_btn()
         self.chain.steps = steps if steps is not None else ch.default_steps(src.color, src.narrowband)
@@ -846,11 +861,13 @@ class StudioPage(Page):
         if self.chain.source is None:
             self._sync_region_btn()
             return
-        if self.chain.region is not None or self._tool_mode == "region":
+        if (self.chain.region is not None and not self._region_auto) or self._tool_mode == "region":
             self.chain.set_region(None)
+            self._region_auto = False
             self._inset = None
             self._set_tool(None)
             self.refresh_view()
+            self._auto_region()
             self._detail_timer()
             return
         self._set_tool("region")
@@ -859,7 +876,8 @@ class StudioPage(Page):
 
     def _sync_region_btn(self) -> None:
         if hasattr(self, "region_btn"):
-            self.region_btn.setChecked(self.chain.region is not None or self._tool_mode == "region")
+            self.region_btn.setChecked((self.chain.region is not None and not self._region_auto)
+                                       or self._tool_mode == "region")
 
     def _region_drawn(self) -> None:
         box = self.image.crop_box
@@ -870,9 +888,49 @@ class StudioPage(Page):
         if src_box is None:
             return
         self.chain.set_region(src_box)
+        self._region_auto = False
         self._inset = None
         self._set_tool(None)
         self._full_timer.stop()
+        self._region_timer.start()
+
+    def _auto_region(self) -> None:
+        """放大到 AUTO_REGION_ZOOM 以上：看得到的範圍（四周多留 15%）自動當成預覽區，只算那一塊的完整解析度；
+        縮小回來就拿掉（使用者自己框的預覽區不動）。"""
+        if self.chain.source is None or not hasattr(self, "image") or self._tool_mode in ("crop", "region"):
+            return
+        if self.chain.region is not None and not self._region_auto:
+            return
+        box = self.image.visible_box()
+        zoom = self.image.current_zoom() * self.image.devicePixelRatioF()
+        fw, fh = self.image.full_size()
+        part = box is not None and (box[2] - box[0]) * (box[3] - box[1]) < AUTO_REGION_PART * fw * fh
+        if box is None or zoom < AUTO_REGION_ZOOM or not part:
+            if self._region_auto:
+                self.chain.set_region(None)
+                self._region_auto = False
+                self._inset = None
+                self.refresh_view()
+                self._detail_timer()
+            return
+        x0, y0, x1, y1 = box
+        if self._region_auto and self._inset is not None:
+            # 還在目前預覽區裡面就不換（平移一點點不重算）
+            ix, iy = self._inset[3]
+            ih, iw = self._inset[2].shape[1:]
+            if x0 >= ix and y0 >= iy and x1 <= ix + iw and y1 <= iy + ih:
+                return
+        px, py = (x1 - x0) * 0.15, (y1 - y0) * 0.15
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        hw, hh = min((x1 - x0) / 2 + px, ch.REGION_MAX / 2), min((y1 - y0) / 2 + py, ch.REGION_MAX / 2)
+        src_box = self.chain.map_to_source((cy - hh, cx - hw, cy + hh, cx + hw), self._view_index())
+        if src_box is None or src_box == self.chain.region:
+            return
+        self.chain.set_region(src_box)
+        self._region_auto = True
+        self._inset = None
+        self._full_timer.stop()
+        self.refresh_view()
         self._region_timer.start()
 
     def _detail_timer(self) -> None:
@@ -888,11 +946,36 @@ class StudioPage(Page):
     # ------------------------------------------------------------------ 計算
 
     def schedule(self) -> None:
+        """參數改了：拖曳中用互動層節流更新（每 THROTTLE_MS 最多一次，算完才排下一次）；
+        停止操作 RELEASE_MS 後改算快速層，再來是完整解析度或預覽區。"""
         if self.chain.source is None:
             return
         self._full_timer.stop()
         self._region_timer.stop()
         self._quick_timer.start()
+        self._throttle_inter()
+
+    def _throttle_inter(self) -> None:
+        if self._job is not None and self._job.res == "inter":
+            self._inter_pending = True          # 上一張互動層還在算：算完再排
+            return
+        wait = THROTTLE_MS / 1000 - (time.time() - self._inter_started)
+        if wait > 0:
+            self._inter_pending = True
+            if not self._inter_timer.isActive():
+                self._inter_timer.start(max(1, int(wait * 1000)))
+            return
+        self._start_inter()
+
+    def _start_inter(self) -> None:
+        self._inter_pending = False
+        if not self._quick_timer.isActive():    # 已經放手（快速層接手了）
+            return
+        index = max(self._view_index(), self.selected)
+        if index < 0 or self.chain.cached(index, "quick") is not None:
+            return
+        self._inter_started = time.time()
+        self._request("inter")
 
     def _view_index(self) -> int:
         """畫面要顯示第幾步的結果（裁切時顯示裁切前）。"""
@@ -921,11 +1004,19 @@ class StudioPage(Page):
         post = self.bridge.post
         self._busy_since = time.time()
 
+        warm = res == "quick" and 0 <= index < len(steps) and tools_mod.get(steps[index].kind).cost == "cheap"
+
         def work() -> None:
             try:
                 r = self.chain.evaluate(index, res, steps, job.cancelled.is_set,
                                         lambda f, s: post(("progress", job.gen, f, s, res)))
                 post(("result", job.gen, r))
+                if warm:
+                    # cheap 步驟：先把互動層的輸入與分析快取備好（幾十毫秒），下次拖曳第一格就不用等
+                    try:
+                        self.chain.evaluate(index, "inter", steps, job.cancelled.is_set)
+                    except Exception:  # noqa: BLE001  （只是預熱，失敗不影響）
+                        pass
             except Cancelled:
                 post(("cancelled", job.gen))
             except RegionOutside:
@@ -934,9 +1025,21 @@ class StudioPage(Page):
                 post(("error", job.gen, traceback.format_exc()))
 
         run_thread(work, f"studio-{res}")
+        self._set_busy(res, 0.0)
+        if res == "inter":
+            return
         text = (T("預覽中…", "Previewing…") if res == "quick" else T("算完整解析度…", "Rendering full resolution…")
                 if res == "full" else T("算預覽區…", "Rendering preview area…"))
         self.set_status(lambda: str(text), 0.0)
+
+    def _set_busy(self, res: str | None, frac: float | None = None) -> None:
+        if not hasattr(self, "image"):
+            return
+        if res is None:
+            self.image.set_busy(None)
+            return
+        name = str(RES_LABEL["region" if res.startswith("region:") else res])
+        self.image.set_busy(name if frac is None or frac <= 0 else f"{name} {round(frac * 100)}%")
 
     def _handle(self, ev: tuple) -> None:
         kind = ev[0]
@@ -949,6 +1052,9 @@ class StudioPage(Page):
             self.schedule()
         elif kind == "progress":
             if self._job is not None and ev[1] == self._job.gen:
+                self._set_busy(ev[4], float(ev[2]))
+                if ev[4] == "inter":
+                    return
                 self.progress = float(ev[2])
                 self.status_changed.emit()
                 self.rail_changed.emit()
@@ -956,7 +1062,14 @@ class StudioPage(Page):
             r: ch.Result = ev[2]
             if self._job is not None and ev[1] == self._job.gen:
                 self._job = None
+                self._set_busy(None)
             self._last[r.res] = r
+            if r.res == "inter":
+                self.has_result = True
+                self.refresh_view()
+                if self._inter_pending:
+                    self._throttle_inter()
+                return
             took = time.time() - self._busy_since
             res = r.res
             text = (T(f"預覽完成（{took:.1f} 秒）", f"Preview ready ({took:.1f} s)") if res == "quick"
@@ -972,10 +1085,14 @@ class StudioPage(Page):
         elif kind == "cancelled":
             if self._job is not None and ev[1] == self._job.gen:
                 self._job = None
+                self._set_busy(None)
+                if self._inter_pending:
+                    self._throttle_inter()
         elif kind == "region_outside":
             if self._job is not None and ev[1] == self._job.gen:
                 self._job = None
             self.chain.set_region(None)
+            self._region_auto = False
             self._inset = None
             self._sync_region_btn()
             self.refresh_view()
@@ -986,6 +1103,7 @@ class StudioPage(Page):
                 self.loading = False
             if self._job is not None and ev[1] == self._job.gen:
                 self._job = None
+                self._set_busy(None)
             self.set_status(lambda: str(T("發生錯誤", "Something went wrong")), None)
             error(self, str(ev[2])[-2000:])
 
@@ -999,9 +1117,10 @@ class StudioPage(Page):
     # ------------------------------------------------------------------ 顯示
 
     def _result_for(self, index: int) -> ch.Result | None:
+        """目前參數算好的結果裡最清楚的一層：完整 > 快速 > 互動。"""
         if self.chain.source is None:
             return None
-        return self.chain.cached(index, "full") or self.chain.cached(index, "quick")
+        return self.chain.cached(index, "full") or self.chain.cached(index, "quick") or self.chain.cached(index, "inter")
 
     def refresh_view(self) -> None:
         if not hasattr(self, "image") or self.chain.source is None:
@@ -1013,7 +1132,7 @@ class StudioPage(Page):
         step = self.current_step()
         scale = self.chain.scale(r.res)
         self.layer_seg.setVisible(r.state.separated)
-        disp = ch.display_of(r.state, self.layer_view.get())
+        disp = self.chain.display(r, self.layer_view.get())
         if step is not None and step.kind == "gradient" and self._tool_mode != "crop":
             view = step.params.get("view", "result")
             if view in ("model", "removed") and r.views.get("model" if view == "model" else "removed") is not None:
@@ -1031,7 +1150,7 @@ class StudioPage(Page):
             prev = self._result_for(index - 1)
             if prev is not None and prev.state.layers and \
                     next(iter(prev.state.layers.values())).shape[-2:] == next(iter(r.state.layers.values())).shape[-2:]:
-                self.image.set_compare(ch.display_of(prev.state, self.layer_view.get()),
+                self.image.set_compare(self.chain.display(prev, self.layer_view.get()),
                                        (str(T("之前", "Before")), str(T("之後", "After"))),
                                        pixel_scale=self.chain.scale(prev.res))
         self.image.set_image(disp, keep_view=True, pixel_scale=scale)
@@ -1043,13 +1162,16 @@ class StudioPage(Page):
         if step is not None and step.kind == "gradient" and step.params.get("view") == "samples" and                 r.views.get("sky_cells") is not None and self._tool_mode is None:
             cells, cell = r.views["sky_cells"]
             grid = (~cells).astype(np.float32)
-            self.image.set_overlay(np.kron(grid, np.ones((cell, cell), np.float32)), "#ff5050", scale, 0.35)
-        self.histogram.set_image(self.image.preview)
-        if getattr(self, "_curve_editor", None) is not None:
-            try:
-                self._curve_editor.set_histogram(self.image.preview)
-            except RuntimeError:
-                self._curve_editor = None
+            # 取樣格是在快速層量的（完整解析度、互動層沿用）：疊色用快速層的像素大小
+            self.image.set_overlay(np.kron(grid, np.ones((cell, cell), np.float32)), "#ff5050",
+                                   r.views.get("sky_cells_scale", scale), 0.35)
+        if r.res != "inter":       # 拖曳中（互動層）不更新直方圖（約 10 ms），放手後快速層再更新
+            self.histogram.set_image(self.image.preview)
+            if getattr(self, "_curve_editor", None) is not None:
+                try:
+                    self._curve_editor.set_histogram(self.image.preview)
+                except RuntimeError:
+                    self._curve_editor = None
         self._refresh_summary()
 
     def _show_inset(self, index: int, mode: str, special_view: bool) -> None:
@@ -1073,10 +1195,8 @@ class StudioPage(Page):
                     before = pg[0]
             self._inset = (index, layer, got[0], got[1], before)
             self.image.set_inset(got[0], got[1], before, stale=False)
-        elif self._inset is not None and self._inset[0] == index and self._inset[1] == layer:
-            self.image.set_inset(self._inset[2], self._inset[3], self._inset[4] if mode == "compare" else None,
-                                 stale=True)
         else:
+            # 參數改了、預覽區還沒算好：不蓋舊的那一塊（會擋住拖曳中的互動層／快速層），等新的算好再疊上去
             self.image.set_inset(None)
 
     def _show_overlay(self) -> None:
@@ -1141,9 +1261,11 @@ class StudioPage(Page):
             z = round(self.image.current_zoom() * self.image.devicePixelRatioF() * 100)
             res = self._result_for(self._view_index())
             tag = "" if res is None else (str(T(" · 預覽", " · preview")) if res.res == "quick" else
+                                          str(T(" · 互動預覽", " · live preview")) if res.res == "inter" else
                                           str(T(" · 完整解析度", " · full resolution")))
             if self.image.inset is not None:
-                tag += str(T(" · 預覽區是完整解析度", " · preview area at full resolution"))
+                tag += (str(T(" · 放大處是完整解析度", " · zoomed area at full resolution")) if self._region_auto
+                        else str(T(" · 預覽區是完整解析度", " · preview area at full resolution")))
             self.set_summary(f"{z}%{tag}")
         else:
             self.set_summary("")

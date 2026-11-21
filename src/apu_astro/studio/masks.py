@@ -56,9 +56,11 @@ def star_weight(L: np.ndarray, grow: float = 0.0) -> np.ndarray:
 
 
 def build(spec: dict | None, img: np.ndarray, linear: bool, scale: float, cache: dict | None = None,
-          ref: np.ndarray | None = None, origin: tuple[float, float] = (0.0, 0.0)) -> np.ndarray | None:
+          ref: np.ndarray | None = None, origin: tuple[float, float] = (0.0, 0.0),
+          stf: list | None = None) -> np.ndarray | None:
     """回傳 (H, W) 的 0–1 遮罩；整張（mode=all 且沒反轉）時回傳 None（不用混合，省時間）。
-    ref：預覽區時整張的縮圖（線性影像自動拉伸的參數從整張量）；origin：這塊在整張的位置。"""
+    ref：預覽區時整張的縮圖（線性影像自動拉伸的參數從整張量）；origin：這塊在整張的位置。
+    stf：線性影像自動拉伸的參數（已經從快速層量好的話直接給，不用再量）。"""
     if not spec or (spec.get("mode", "all") == "all" and not spec.get("invert")):
         return None
     p = ops.planes(img)
@@ -67,7 +69,7 @@ def build(spec: dict | None, img: np.ndarray, linear: bool, scale: float, cache:
     if mode == "all":
         m = np.ones((h, w), np.float32)
     elif mode in ("bright", "dark", "range"):
-        disp = ops.auto_display(p, ref) if linear else p
+        disp = _disp(p, ref, stf) if linear else p
         Y = ops.luminance(disp)
         lo, hi = float(spec.get("lo", 0.25)), float(spec.get("hi", 1.0))
         soft = 0.08
@@ -90,7 +92,7 @@ def build(spec: dict | None, img: np.ndarray, linear: bool, scale: float, cache:
         if p.shape[0] < 3:
             m = np.ones((h, w), np.float32)
         else:
-            disp = ops.auto_display(p, ref) if linear else p
+            disp = _disp(p, ref, stf) if linear else p
             lab = ops.rgb_to_oklab(disp)
             hue = np.degrees(np.arctan2(lab[2], lab[1])) % 360
             chroma = np.hypot(lab[1], lab[2])
@@ -106,6 +108,15 @@ def build(spec: dict | None, img: np.ndarray, linear: bool, scale: float, cache:
     if spec.get("invert"):
         m = 1 - m
     return np.clip(m, 0, 1).astype(np.float32)
+
+
+def _disp(p: np.ndarray, ref: np.ndarray | None, stf: list | None) -> np.ndarray:
+    return ops.apply_stf(p, stf, linked=False) if stf is not None else ops.auto_display(p, ref)
+
+
+def needs_stf(spec: dict | None) -> bool:
+    """這個遮罩要不要線性影像的自動拉伸（亮度、顏色範圍）。"""
+    return bool(spec) and spec.get("mode") in ("bright", "dark", "range", "color")
 
 
 def blend(before: np.ndarray, after: np.ndarray, mask: np.ndarray | None) -> np.ndarray:

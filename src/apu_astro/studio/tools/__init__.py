@@ -72,6 +72,15 @@ class Ctx:
     full_input: np.ndarray | None = None          # 預覽區且這一步的輸入就是來源時：整張完整解析度的輸入
     notes: dict = field(default_factory=dict)     # 輸入狀態的各層附註（State.notes）
     frame_ops: list | None = None                 # 前面的裁切／旋轉／翻轉（chain._geometry_ops），換算回原圖座標用
+    # 從快速層量的整張統計（這一步、這個輸入；各解析度共用）。ctx.whole() 量到的東西放這裡，拖滑桿時不用重量
+    stats: dict = field(default_factory=dict)
+    interactive: bool = False                     # 互動層（拖曳中）：可以沿用上次量的統計，放手後快速層重算
+
+    def stat(self, key, fn: Callable[[], object]):
+        """整張統計：同一個輸入只量一次（各解析度共用；鍵要含影響結果的參數）。"""
+        if key not in self.stats:
+            self.stats[key] = fn()
+        return self.stats[key]
 
     def check(self) -> None:
         if self.cancel():
@@ -140,6 +149,8 @@ class Tool:
     icon = "process"
     maskable = True          # 可以選作用範圍
     auto_layer = "starless"  # 分離星點後「自動」作用在哪一層
+    # cheap：逐像素運算（拉伸、調色、曲線、合成星點…），統計從快取拿，互動層幾十毫秒；heavy：要看鄰近像素或跑模型
+    cost = "heavy"
 
     def defaults(self) -> dict:
         return {}
@@ -175,8 +186,11 @@ class Tool:
                                       f"{self.title.en} is meant for stretched data (this layer is linear)"))
             p = ops.planes(img)
             res = ops.planes(self.apply(p, params, ctx, linear))
-            m = masks.build(mask, p, linear, ctx.scale, ctx.cache, ref=ctx.whole(p) if ctx.ref is not None else None,
-                            origin=ctx.origin) if self.maskable else None
+            m = None
+            if self.maskable:
+                stf = ctx.stat(("mask_stf", name), lambda p=p: ops.stf_params(ctx.whole(p))) \
+                    if linear and masks.needs_stf(mask) else None
+                m = masks.build(mask, p, linear, ctx.scale, ctx.cache, origin=ctx.origin, stf=stf)
             res = ops.planes(masks.blend(p, res, m))
             out.phase[name] = self.out_phase(linear)
             if out.phase[name] != "linear":

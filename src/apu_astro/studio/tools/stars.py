@@ -1246,6 +1246,7 @@ register(StarSplit())
 
 class StarMerge(Tool):
     kind = "star_merge"
+    cost = "cheap"
     title = T("合成星點", "Recombine Stars")
     help = T("把星點層加回無星圖。可以調星點的亮度、大小與顏色。星點層還沒拉伸的話會自動用保色拉伸。",
              "Puts the stars back on the starless image, with control over star brightness, size and colour. "
@@ -1280,7 +1281,8 @@ class StarMerge(Tool):
             out.warnings.append(T("無星圖還沒拉伸：先用自動拉伸顯示", "The starless layer is still linear; it was "
                                                              "auto-stretched"))
             ctx.layer = "starless"
-            base = ops.auto_display(base, ctx.whole(base) if ctx.ref is not None else None)
+            stf = ctx.stat(("starless_stf",), lambda b=base: ops.stf_params(ctx.whole(b)))
+            base = ops.apply_stf(base, stf, linked=False)
         if state.phase.get("stars") == "linear":
             black = [0.0] * len(stars)
             stars = ops.arcsinh_stretch(stars, float(params.get("beta", 60.0)) * 50, black)

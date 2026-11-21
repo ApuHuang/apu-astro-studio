@@ -66,12 +66,14 @@ class Deconvolution(Tool):
         round_at, sharp_at = self._kernels(L, stars, params, ctx)
         # 飽和星核：不參與比對（往外擴 2 px），結果也保持原值
         whole = ctx.whole(img)
-        tops = [max(float(img[c].max()), float(whole[c].max())) for c in range(img.shape[0])]
+        wtops = ctx.stat(("tops", ctx.layer), lambda: [float(c.max()) for c in whole])
+        tops = [max(float(img[c].max()), wtops[c]) for c in range(img.shape[0])]
         sat = psf.saturation_mask(img, tops=tops)
         valid = ~ndimage.binary_dilation(sat, iterations=2) if sat.any() else None
         sky, sig = ops.robust_stats(L)
-        if ctx.ref is not None:      # 預覽區：天空從整張量（這一塊可能整片都是星雲）
-            sky = ops.robust_stats(ops.luminance(ctx.whole(img)) if img.shape[0] > 1 else ctx.whole(img)[0])[0]
+        if ctx.ref is not None:      # 天空從快速層的整張量（預覽區這一塊可能整片都是星雲）
+            sky = ctx.stat(("sky", ctx.layer), lambda: ops.robust_stats(
+                ops.luminance(whole) if img.shape[0] > 1 else whole[0])[0])
         pedestal = sky - 5 * max(sig, 1e-9)
         tile, pad = max(256, int(1024 / ctx.scale)), max(24, int(64 / ctx.scale))
         W = stars.weight.astype(np.float32)
@@ -221,7 +223,8 @@ class Sharpen(Tool):
             base = smooth + coeffs[-1] if len(coeffs) > scales else smooth
             if ctx.ref is not None:
                 wl = ctx.whole(p)
-                q = float(np.quantile((wl.mean(axis=0) if wl.shape[0] > 1 else wl[0])[:: 2, :: 2], 0.75))
+                q = ctx.stat(("hdr_q", ctx.layer), lambda: float(np.quantile(
+                    (wl.mean(axis=0) if wl.shape[0] > 1 else wl[0])[:: 2, :: 2], 0.75)))
             else:
                 q = float(np.quantile(base[:: 4, :: 4], 0.75))
             newL = newL - hdr * 0.8 * np.maximum(base - q, 0)

@@ -11,7 +11,7 @@ import numpy as np
 from apu_processing import api as papi
 from scipy import ndimage
 
-from .. import ops
+from .. import ops, psf
 from . import T, Ctx, Tool, choice, register, section, slider, special, toggle
 
 # ---------------------------------------------------------------------- 校色
@@ -19,6 +19,7 @@ from . import T, Ctx, Tool, choice, register, section, slider, special, toggle
 
 class ColorCalibration(Tool):
     kind = "color_cal"
+    cost = "cheap"
     title = T("校色", "Color Calibration")
     help = T("背景中性化：讓天空三色一樣。白平衡：用很多顆星的平均顏色校正（近似星表校色的結果）。窄帶合成通常不做。",
              "Background neutralization makes the sky neutral. White balance uses the average colour of many stars "
@@ -45,31 +46,45 @@ class ColorCalibration(Tool):
             return img
         out = img
         # 白平衡倍率、天空、飽和星的上限都從整張量（預覽區時用整張的縮圖量）
+        # 倍率、天空都依輸入快取（各解析度共用快速層量的值）：拖強度滑桿時不用重量
         whole = ctx.whole(img)
         scale = ctx.whole_scale
+        lay = ctx.layer
+        gains = None
         if params.get("balance", "stars") == "stars":
-            key = ("balance", whole.shape)
-            bal = ctx.cache.get(key)
-            if bal is None:
-                bal = papi.measure_balance(whole)
-                ctx.cache[key] = bal
+            bal = ctx.stat(("balance", lay), lambda: papi.measure_balance(whole))
             k = float(params.get("strength", 1.0))
             gains = tuple(1 + (g - 1) * k for g in bal.gains)
             ctx.view["gains"] = gains
-            noise = papi.measure_stretch_noise(whole, scale)
-            tops = [max(float(img[c].max()), float(whole[c].max())) for c in range(img.shape[0])]
-            out = _apply_gains(out, gains, noise.sky, tops, ctx.scale)
-            if whole is not img:
-                whole = _apply_gains(whole, gains, noise.sky, tops, ctx.whole_scale)
-            else:
-                whole = out
+            noise = ctx.stat(("noise", lay), lambda: papi.measure_stretch_noise(whole, scale))
+            wtops = ctx.stat(("tops", lay), lambda: [float(c.max()) for c in whole])
+            tops = [max(float(img[c].max()), wtops[c]) for c in range(img.shape[0])]
+            # 飽和區只跟影像有關（跟倍率無關）：依輸入快取，拖強度時不用重找
+            near = ctx.cache.get(("sat", lay))
+            if near is None:
+                near = ctx.cache[("sat", lay)] = psf.saturation_mask(img, tops=tops)
+            out = _apply_gains(out, gains, noise.sky, tops, ctx.scale, near)
         if params.get("neutralize", True):
-            sky = np.asarray(papi.measure_stretch_noise(whole, scale).sky, np.float32)
+            def neutral_sky() -> np.ndarray:
+                if gains is None:
+                    w = whole
+                else:
+                    wnear = ctx.stat(("sat_whole", lay), lambda: psf.saturation_mask(whole, tops=wtops))
+                    w = _apply_gains(whole, gains, noise.sky, wtops, scale, wnear)
+                return np.asarray(papi.measure_stretch_noise(w, scale).sky, np.float32)
+
+            last = ctx.stats.get(("neutral_sky_last", lay))
+            if ctx.interactive and last is not None:
+                sky = last          # 拖曳中（互動層）沿用這個輸入上次量的天空，放手後快速層重量（凍結統計）
+            else:
+                sky = ctx.stat(("neutral_sky", lay, gains), neutral_sky)
+                ctx.stats[("neutral_sky_last", lay)] = sky
             out = out - (sky - sky.mean())[:, None, None]
         return out.astype(np.float32)
 
 
-def _apply_gains(image: np.ndarray, gains, sky, tops: list[float], scale: float = 1.0) -> np.ndarray:
+def _apply_gains(image: np.ndarray, gains, sky, tops: list[float], scale: float = 1.0,
+                 near: np.ndarray | None = None) -> np.ndarray:
     """(x − 天空)·倍率 + 天空；已經飽和的區域另外處理。
 
     飽和用「局部平頂」判斷（psf.saturation_mask）：WBPP 的 master 每顆飽和星停在不同高度（0.93～0.97），
@@ -78,11 +93,11 @@ def _apply_gains(image: np.ndarray, gains, sky, tops: list[float], scale: float 
     - 大的（星系核心）：外圍一圈的顏色（改成白色的話，M31 整個飽和的核心變成一顆藍白色的蛋）
     - 小的（星點）：中性白。光暈的顏色不等於星的顏色（紅光的星點比較大，光暈偏紅）；用外圈的顏色的話，
       紅色星雲裡的亮星核心變成一塊粉紅色的圓盤"""
-    from .. import psf
     sky = np.asarray(sky, np.float32)[:, None, None]
     g = np.asarray(gains, np.float32)[:, None, None]
     out = ((image - sky) * g + sky).astype(np.float32)
-    near = psf.saturation_mask(image, tops=tops)
+    if near is None:
+        near = psf.saturation_mask(image, tops=tops)
     if not near.any() or near.mean() > 0.05:
         return out
     region = ndimage.binary_dilation(near, iterations=2)
@@ -126,6 +141,7 @@ PALETTES = {
 
 class ColorGrade(Tool):
     kind = "color_grade"
+    cost = "cheap"
     title = T("調色", "Color Grading")
     help = T("三個色輪分別調暗部、中間調、亮部的色調；自然飽和度只加強原本不飽和的地方；"
              "選擇性色彩可以用滴管在畫面上點一個顏色再調整它。",
@@ -185,10 +201,13 @@ class ColorGrade(Tool):
                              float(params.get("sel_light", 0))))
         sat, vib = float(params.get("saturation", 1)), float(params.get("vibrance", 0))
         if ops_list or abs(sat - 1) > 1e-3 or abs(vib) > 1e-3:
-            lab = ops.rgb_to_oklab(p)
-            Lk, a, b = lab[0], lab[1], lab[2]
-            C = np.hypot(a, b)
-            H = np.degrees(np.arctan2(b, a)) % 360
+            # 輸入的 OKLCh 依輸入快取（拖滑桿時輸入不變，只重算調整的部分）
+            key = ("oklch", ctx.layer)
+            if key not in ctx.cache:
+                lab = ops.rgb_to_oklab(p)
+                ctx.cache[key] = (lab[0], np.hypot(lab[1], lab[2]), np.degrees(np.arctan2(lab[2], lab[1])) % 360,
+                                  ops.luminance(p))
+            Lk, C, H, Y_in = ctx.cache[key]
             for center, width, shift, csc, light in ops_list:
                 w = ops.angular_weight(H, center, width, width * 0.5) * ops.smoothstep(0.005, 0.03, C)
                 H = (H + shift * w) % 360
@@ -197,7 +216,7 @@ class ColorGrade(Tool):
                 ctx.check()
             if abs(sat - 1) > 1e-3 or abs(vib) > 1e-3:
                 protect = float(params.get("protect", 0.5))
-                Y = ops.luminance(p)
+                Y = Y_in
                 guard = 1 - protect * (1 - ops.smoothstep(0.08, 0.35, Y))
                 boost = (sat - 1) + vib * (1 - ops.smoothstep(0.0, 0.18, C))
                 C = C * np.maximum(0, 1 + boost * guard)
@@ -238,6 +257,7 @@ def identity_curves() -> dict:
 
 class Curves(Tool):
     kind = "curves"
+    cost = "cheap"
     title = T("曲線", "Curves")
     help = T("主曲線調明暗與對比，紅綠藍各自的曲線微調色調。雙擊加點、雙擊點刪除。",
              "The master curve sets brightness and contrast; the red, green and blue curves fine-tune colour. "
