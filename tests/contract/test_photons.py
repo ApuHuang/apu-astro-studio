@@ -40,7 +40,8 @@ def stacked(frames, tmp_path_factory):
     """疊圖頁 _start 的呼叫方式（CPU、單一行程，結果才每台機器一樣）。"""
     folder, lights, darks = frames
     out = folder.parent / "out"
-    s = Settings(gpu="cpu", workers=1)
+    # 不自動裁邊：裁邊依覆蓋率門檻決定，對齊的浮點差一點就差一列（macOS 雲端 115 列 vs Windows 116 列），輸出尺寸要固定
+    s = Settings(gpu="cpu", workers=1, crop_common=False)
     s.reference = None
     stages: list[str] = []
     res = run(lights + darks, out, s, echo=lambda _line: None,
@@ -138,7 +139,7 @@ def test_run(stacked):
         "recipe": res.recipe.relative_to(root).as_posix(),
         "masters": masters,
         "accepted": sorted(f.path.name for o in res.outputs for f in o.frames),
-    })
+    }, rel=1e-4)   # 對齊的浮點運算在不同平台／CPU 上不完全一樣
 
 
 def test_load_recipe(stacked):
