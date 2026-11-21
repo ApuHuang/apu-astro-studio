@@ -10,173 +10,28 @@
        {
         "__dataclass__": "Decision",
         "group": "Filter L / 120s exposure",
-        "keep": true,
+        "keep": false,
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.503662109375,
+         "background": 2105.73486328125,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:10:00",
-         "eccentricity": 0.12547026005987535,
+         "eccentricity": 0.3063136521750527,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_000.fits",
          "filter": "L",
-         "fwhm": 2.5944608561974998,
+         "fwhm": 2.6608226006103077,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.85332489013672,
-         "saturated_frac": 0.002864583333333333,
-         "snr": 168.6460834237331
-        },
-        "override": null,
-        "reasons": [],
-        "score": 99.95048869751504
-       },
-       {
-        "__dataclass__": "Decision",
-        "group": "Filter L / 120s exposure",
-        "keep": true,
-        "metrics": {
-         "__dataclass__": "FrameMetrics",
-         "altitude": null,
-         "background": 2105.91259765625,
-         "camera": "TestCam",
-         "date_obs": "2026-11-01T20:13:00",
-         "eccentricity": 0.13490494440913994,
-         "error": null,
-         "exposure": 120.0,
-         "file": "<tmp>/lights/light_001.fits",
-         "filter": "L",
-         "fwhm": 2.594336576679122,
-         "gain": 100.0,
-         "iso": null,
-         "moon_alt": null,
-         "moon_illum": null,
-         "moon_sep": null,
-         "n_stars": 27,
-         "noise": 85.07121276855469,
-         "saturated_frac": 0.002447916666666667,
-         "snr": 205.29223868373433
-        },
-        "override": null,
-        "reasons": [],
-        "score": 99.71176776830536
-       },
-       {
-        "__dataclass__": "Decision",
-        "group": "Filter L / 120s exposure",
-        "keep": false,
-        "metrics": {
-         "__dataclass__": "FrameMetrics",
-         "altitude": null,
-         "background": 2105.8779296875,
-         "camera": "TestCam",
-         "date_obs": "2026-11-01T20:16:00",
-         "eccentricity": 0.1718587072565989,
-         "error": null,
-         "exposure": 120.0,
-         "file": "<tmp>/lights/light_002.fits",
-         "filter": "L",
-         "fwhm": 2.5877056700902,
-         "gain": 100.0,
-         "iso": null,
-         "moon_alt": null,
-         "moon_illum": null,
-         "moon_sep": null,
-         "n_stars": 27,
-         "noise": 84.733642578125,
-         "saturated_frac": 0.0025520833333333333,
-         "snr": 175.5896093428108
-        },
-        "override": null,
-        "reasons": [
-         {
-          "__dataclass__": "Reason",
-          "code": "score_low",
-          "params": {
-           "__dict__": [
-            [
-             "metric",
-             "eccentricity"
-            ],
-            [
-             "ratio",
-             0.9497056461583421
-            ],
-            [
-             "score",
-             98.48846293020686
-            ],
-            [
-             "threshold",
-             99.2579793650871
-            ]
-           ]
-          }
-         }
-        ],
-        "score": 98.48846293020686
-       },
-       {
-        "__dataclass__": "Decision",
-        "group": "Filter L / 120s exposure",
-        "keep": true,
-        "metrics": {
-         "__dataclass__": "FrameMetrics",
-         "altitude": null,
-         "background": 2105.291015625,
-         "camera": "TestCam",
-         "date_obs": "2026-11-01T20:19:00",
-         "eccentricity": 0.14484307291987286,
-         "error": null,
-         "exposure": 120.0,
-         "file": "<tmp>/lights/light_003.fits",
-         "filter": "L",
-         "fwhm": 2.602888168572204,
-         "gain": 100.0,
-         "iso": null,
-         "moon_alt": null,
-         "moon_illum": null,
-         "moon_sep": null,
-         "n_stars": 27,
-         "noise": 84.60197448730469,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 212.73737621686453
-        },
-        "override": null,
-        "reasons": [],
-        "score": 99.2579793650871
-       },
-       {
-        "__dataclass__": "Decision",
-        "group": "Filter L / 120s exposure",
-        "keep": false,
-        "metrics": {
-         "__dataclass__": "FrameMetrics",
-         "altitude": null,
-         "background": 2105.746337890625,
-         "camera": "TestCam",
-         "date_obs": "2026-11-01T20:22:00",
-         "eccentricity": 0.1365695626675118,
-         "error": null,
-         "exposure": 120.0,
-         "file": "<tmp>/lights/light_004.fits",
-         "filter": "L",
-         "fwhm": 2.6009554656588754,
-         "gain": 100.0,
-         "iso": null,
-         "moon_alt": null,
-         "moon_illum": null,
-         "moon_sep": null,
-         "n_stars": 26,
-         "noise": 84.88520812988281,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 182.58162223260425
+         "noise": 84.92024230957031,
+         "saturated_frac": 0.00296875,
+         "snr": 168.33792694884565
         },
         "override": null,
         "reasons": [
@@ -191,21 +46,76 @@
             ],
             [
              "ratio",
-             0.9629629629629629
+             0.9878048780487805
             ],
             [
              "score",
-             98.82599594079068
+             99.38005384309729
             ],
             [
              "threshold",
-             99.2579793650871
+             99.47365682763288
             ]
            ]
           }
          }
         ],
-        "score": 98.82599594079068
+        "score": 99.38005384309729
+       },
+       {
+        "__dataclass__": "Decision",
+        "group": "Filter L / 120s exposure",
+        "keep": false,
+        "metrics": {
+         "__dataclass__": "FrameMetrics",
+         "altitude": null,
+         "background": 2106.04736328125,
+         "camera": "TestCam",
+         "date_obs": "2026-11-01T20:13:00",
+         "eccentricity": 0.30690747197263735,
+         "error": null,
+         "exposure": 120.0,
+         "file": "<tmp>/lights/light_001.fits",
+         "filter": "L",
+         "fwhm": 2.656508146906975,
+         "gain": 100.0,
+         "iso": null,
+         "moon_alt": null,
+         "moon_illum": null,
+         "moon_sep": null,
+         "n_stars": 27,
+         "noise": 85.17027282714844,
+         "saturated_frac": 0.0026041666666666665,
+         "snr": 203.84111346343303
+        },
+        "override": null,
+        "reasons": [
+         {
+          "__dataclass__": "Reason",
+          "code": "score_low",
+          "params": {
+           "__dict__": [
+            [
+             "metric",
+             "n_stars"
+            ],
+            [
+             "ratio",
+             0.9878048780487805
+            ],
+            [
+             "score",
+             99.4090507794348
+            ],
+            [
+             "threshold",
+             99.47365682763288
+            ]
+           ]
+          }
+         }
+        ],
+        "score": 99.4090507794348
        },
        {
         "__dataclass__": "Decision",
@@ -214,28 +124,118 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.69921875,
+         "background": 2106.1845703125,
+         "camera": "TestCam",
+         "date_obs": "2026-11-01T20:16:00",
+         "eccentricity": 0.3033614714227659,
+         "error": null,
+         "exposure": 120.0,
+         "file": "<tmp>/lights/light_002.fits",
+         "filter": "L",
+         "fwhm": 2.649844342870323,
+         "gain": 100.0,
+         "iso": null,
+         "moon_alt": null,
+         "moon_illum": null,
+         "moon_sep": null,
+         "n_stars": 28,
+         "noise": 85.02713775634766,
+         "saturated_frac": 0.00265625,
+         "snr": 198.10027980173854
+        },
+        "override": null,
+        "reasons": [],
+        "score": 99.85287145350428
+       },
+       {
+        "__dataclass__": "Decision",
+        "group": "Filter L / 120s exposure",
+        "keep": true,
+        "metrics": {
+         "__dataclass__": "FrameMetrics",
+         "altitude": null,
+         "background": 2105.54248046875,
+         "camera": "TestCam",
+         "date_obs": "2026-11-01T20:19:00",
+         "eccentricity": 0.3028624325535851,
+         "error": null,
+         "exposure": 120.0,
+         "file": "<tmp>/lights/light_003.fits",
+         "filter": "L",
+         "fwhm": 2.6649749340335216,
+         "gain": 100.0,
+         "iso": null,
+         "moon_alt": null,
+         "moon_illum": null,
+         "moon_sep": null,
+         "n_stars": 27,
+         "noise": 84.62577819824219,
+         "saturated_frac": 0.0028125,
+         "snr": 211.22506222914208
+        },
+        "override": null,
+        "reasons": [],
+        "score": 99.47365682763288
+       },
+       {
+        "__dataclass__": "Decision",
+        "group": "Filter L / 120s exposure",
+        "keep": true,
+        "metrics": {
+         "__dataclass__": "FrameMetrics",
+         "altitude": null,
+         "background": 2105.901123046875,
+         "camera": "TestCam",
+         "date_obs": "2026-11-01T20:22:00",
+         "eccentricity": 0.2978453238953124,
+         "error": null,
+         "exposure": 120.0,
+         "file": "<tmp>/lights/light_004.fits",
+         "filter": "L",
+         "fwhm": 2.6673474106086275,
+         "gain": 100.0,
+         "iso": null,
+         "moon_alt": null,
+         "moon_illum": null,
+         "moon_sep": null,
+         "n_stars": 27,
+         "noise": 84.8675308227539,
+         "saturated_frac": 0.0027604166666666667,
+         "snr": 192.30205226525536
+        },
+        "override": null,
+        "reasons": [],
+        "score": 99.56389828258524
+       },
+       {
+        "__dataclass__": "Decision",
+        "group": "Filter L / 120s exposure",
+        "keep": true,
+        "metrics": {
+         "__dataclass__": "FrameMetrics",
+         "altitude": null,
+         "background": 2106.24462890625,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:25:00",
-         "eccentricity": 0.1236312102764841,
+         "eccentricity": 0.29930626110084446,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_005.fits",
          "filter": "L",
-         "fwhm": 2.599047023519704,
+         "fwhm": 2.6612824107215856,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.837646484375,
-         "saturated_frac": 0.0025520833333333333,
-         "snr": 214.1887577519101
+         "noise": 85.11470794677734,
+         "saturated_frac": 0.0026041666666666665,
+         "snr": 212.28812901936195
         },
         "override": null,
         "reasons": [],
-        "score": 99.88742343820351
+        "score": 99.64078114469648
        },
        {
         "__dataclass__": "Decision",
@@ -244,24 +244,24 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.75341796875,
+         "background": 2105.9521484375,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:28:00",
-         "eccentricity": 0.15333216530868346,
+         "eccentricity": 0.310318771249946,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_006.fits",
          "filter": "L",
-         "fwhm": 2.590338906682758,
+         "fwhm": 2.6520321970716445,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.8831787109375,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 139.22952184686272
+         "noise": 85.01630401611328,
+         "saturated_frac": 0.0028125,
+         "snr": 138.7413654733082
         },
         "override": null,
         "reasons": [
@@ -276,21 +276,21 @@
             ],
             [
              "ratio",
-             0.9709517326002319
+             0.9852654748847453
             ],
             [
              "score",
-             99.12673230288418
+             99.31245213534159
             ],
             [
              "threshold",
-             99.2579793650871
+             99.47365682763288
             ]
            ]
           }
          }
         ],
-        "score": 99.12673230288418
+        "score": 99.31245213534159
        },
        {
         "__dataclass__": "Decision",
@@ -299,24 +299,24 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2131.392333984375,
+         "background": 2131.468994140625,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:31:00",
-         "eccentricity": 0.8345278999193534,
+         "eccentricity": 0.8318084161677306,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_007.fits",
          "filter": "L",
-         "fwhm": 5.366318572205057,
+         "fwhm": 5.3881141284485965,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
-         "n_stars": 23,
-         "noise": 137.6193084716797,
-         "saturated_frac": 0.01125,
-         "snr": 77.23428368428984
+         "n_stars": 24,
+         "noise": 138.13087463378906,
+         "saturated_frac": 0.011197916666666667,
+         "snr": 98.37782590420704
         },
         "override": null,
         "reasons": [
@@ -331,21 +331,21 @@
             ],
             [
              "ratio",
-             0.18976204798057458
+             0.2402752950322419
             ],
             [
              "score",
-             54.44523967660126
+             56.82004186853508
             ],
             [
              "threshold",
-             99.2579793650871
+             99.47365682763288
             ]
            ]
           }
          }
         ],
-        "score": 54.44523967660126
+        "score": 56.82004186853508
        }
       ]
      ],
@@ -367,9 +367,9 @@
      [
       "summary",
       [
-       "Reference (average of the best frames per metric): FWHM 2.59, eccentricity 0.13, star count 27, background 2105, SNR 210.7",
-       "Score mode 99.3, MAD 2.0, pass line 80",
-       "Keep threshold = 99.3 (keeping the best 4 frames)"
+       "Reference (average of the best frames per metric): FWHM 2.65, eccentricity 0.30, star count 27, background 2106, SNR 209.1",
+       "Score mode 99.5, MAD 2.0, pass line 80",
+       "Keep threshold = 99.5 (keeping the best 4 frames)"
       ]
      ],
      [
@@ -378,7 +378,7 @@
        "__dict__": [
         [
          "Filter L / 120s exposure",
-         99.2579793650871
+         99.47365682763288
         ]
        ]
       }
@@ -400,28 +400,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.503662109375,
+         "background": 2105.73486328125,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:10:00",
-         "eccentricity": 0.12547026005987535,
+         "eccentricity": 0.3063136521750527,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_000.fits",
          "filter": "L",
-         "fwhm": 2.5944608561974998,
+         "fwhm": 2.6608226006103077,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.85332489013672,
-         "saturated_frac": 0.002864583333333333,
-         "snr": 168.6460834237331
+         "noise": 84.92024230957031,
+         "saturated_frac": 0.00296875,
+         "snr": 168.33792694884565
         },
         "override": null,
         "reasons": [],
-        "score": 99.95048869751504
+        "score": 99.38005384309729
        },
        {
         "__dataclass__": "Decision",
@@ -430,28 +430,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.91259765625,
+         "background": 2106.04736328125,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:13:00",
-         "eccentricity": 0.13490494440913994,
+         "eccentricity": 0.30690747197263735,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_001.fits",
          "filter": "L",
-         "fwhm": 2.594336576679122,
+         "fwhm": 2.656508146906975,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 85.07121276855469,
-         "saturated_frac": 0.002447916666666667,
-         "snr": 205.29223868373433
+         "noise": 85.17027282714844,
+         "saturated_frac": 0.0026041666666666665,
+         "snr": 203.84111346343303
         },
         "override": null,
         "reasons": [],
-        "score": 99.71176776830536
+        "score": 99.4090507794348
        },
        {
         "__dataclass__": "Decision",
@@ -460,28 +460,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.8779296875,
+         "background": 2106.1845703125,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:16:00",
-         "eccentricity": 0.1718587072565989,
+         "eccentricity": 0.3033614714227659,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_002.fits",
          "filter": "L",
-         "fwhm": 2.5877056700902,
+         "fwhm": 2.649844342870323,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
-         "n_stars": 27,
-         "noise": 84.733642578125,
-         "saturated_frac": 0.0025520833333333333,
-         "snr": 175.5896093428108
+         "n_stars": 28,
+         "noise": 85.02713775634766,
+         "saturated_frac": 0.00265625,
+         "snr": 198.10027980173854
         },
         "override": null,
         "reasons": [],
-        "score": 98.48846293020686
+        "score": 99.85287145350428
        },
        {
         "__dataclass__": "Decision",
@@ -490,28 +490,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.291015625,
+         "background": 2105.54248046875,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:19:00",
-         "eccentricity": 0.14484307291987286,
+         "eccentricity": 0.3028624325535851,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_003.fits",
          "filter": "L",
-         "fwhm": 2.602888168572204,
+         "fwhm": 2.6649749340335216,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.60197448730469,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 212.73737621686453
+         "noise": 84.62577819824219,
+         "saturated_frac": 0.0028125,
+         "snr": 211.22506222914208
         },
         "override": null,
         "reasons": [],
-        "score": 99.2579793650871
+        "score": 99.47365682763288
        },
        {
         "__dataclass__": "Decision",
@@ -520,28 +520,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.746337890625,
+         "background": 2105.901123046875,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:22:00",
-         "eccentricity": 0.1365695626675118,
+         "eccentricity": 0.2978453238953124,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_004.fits",
          "filter": "L",
-         "fwhm": 2.6009554656588754,
+         "fwhm": 2.6673474106086275,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
-         "n_stars": 26,
-         "noise": 84.88520812988281,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 182.58162223260425
+         "n_stars": 27,
+         "noise": 84.8675308227539,
+         "saturated_frac": 0.0027604166666666667,
+         "snr": 192.30205226525536
         },
         "override": null,
         "reasons": [],
-        "score": 98.82599594079068
+        "score": 99.56389828258524
        },
        {
         "__dataclass__": "Decision",
@@ -550,28 +550,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.69921875,
+         "background": 2106.24462890625,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:25:00",
-         "eccentricity": 0.1236312102764841,
+         "eccentricity": 0.29930626110084446,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_005.fits",
          "filter": "L",
-         "fwhm": 2.599047023519704,
+         "fwhm": 2.6612824107215856,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.837646484375,
-         "saturated_frac": 0.0025520833333333333,
-         "snr": 214.1887577519101
+         "noise": 85.11470794677734,
+         "saturated_frac": 0.0026041666666666665,
+         "snr": 212.28812901936195
         },
         "override": null,
         "reasons": [],
-        "score": 99.88742343820351
+        "score": 99.64078114469648
        },
        {
         "__dataclass__": "Decision",
@@ -580,28 +580,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.75341796875,
+         "background": 2105.9521484375,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:28:00",
-         "eccentricity": 0.15333216530868346,
+         "eccentricity": 0.310318771249946,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_006.fits",
          "filter": "L",
-         "fwhm": 2.590338906682758,
+         "fwhm": 2.6520321970716445,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.8831787109375,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 139.22952184686272
+         "noise": 85.01630401611328,
+         "saturated_frac": 0.0028125,
+         "snr": 138.7413654733082
         },
         "override": null,
         "reasons": [],
-        "score": 99.12673230288418
+        "score": 99.31245213534159
        },
        {
         "__dataclass__": "Decision",
@@ -610,24 +610,24 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2131.392333984375,
+         "background": 2131.468994140625,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:31:00",
-         "eccentricity": 0.8345278999193534,
+         "eccentricity": 0.8318084161677306,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_007.fits",
          "filter": "L",
-         "fwhm": 5.366318572205057,
+         "fwhm": 5.3881141284485965,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
-         "n_stars": 23,
-         "noise": 137.6193084716797,
-         "saturated_frac": 0.01125,
-         "snr": 77.23428368428984
+         "n_stars": 24,
+         "noise": 138.13087463378906,
+         "saturated_frac": 0.011197916666666667,
+         "snr": 98.37782590420704
         },
         "override": null,
         "reasons": [
@@ -642,11 +642,11 @@
             ],
             [
              "ratio",
-             0.18976204798057458
+             0.2402752950322419
             ],
             [
              "score",
-             54.44523967660126
+             56.82004186853508
             ],
             [
              "threshold",
@@ -656,7 +656,7 @@
           }
          }
         ],
-        "score": 54.44523967660126
+        "score": 56.82004186853508
        }
       ]
      ],
@@ -678,8 +678,8 @@
      [
       "summary",
       [
-       "Reference (average of the best frames per metric): FWHM 2.59, eccentricity 0.13, star count 27, background 2105, SNR 210.7",
-       "Score mode 99.3, MAD 2.0, pass line 80",
+       "Reference (average of the best frames per metric): FWHM 2.65, eccentricity 0.30, star count 27, background 2106, SNR 209.1",
+       "Score mode 99.5, MAD 2.0, pass line 80",
        "Keep threshold = 60.0 (minimum score you set)"
       ]
      ],
@@ -711,28 +711,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.503662109375,
+         "background": 2105.73486328125,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:10:00",
-         "eccentricity": 0.12547026005987535,
+         "eccentricity": 0.3063136521750527,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_000.fits",
          "filter": "L",
-         "fwhm": 2.5944608561974998,
+         "fwhm": 2.6608226006103077,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.85332489013672,
-         "saturated_frac": 0.002864583333333333,
-         "snr": 168.6460834237331
+         "noise": 84.92024230957031,
+         "saturated_frac": 0.00296875,
+         "snr": 168.33792694884565
         },
         "override": null,
         "reasons": [],
-        "score": 99.95048869751504
+        "score": 99.38005384309729
        },
        {
         "__dataclass__": "Decision",
@@ -741,28 +741,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.91259765625,
+         "background": 2106.04736328125,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:13:00",
-         "eccentricity": 0.13490494440913994,
+         "eccentricity": 0.30690747197263735,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_001.fits",
          "filter": "L",
-         "fwhm": 2.594336576679122,
+         "fwhm": 2.656508146906975,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 85.07121276855469,
-         "saturated_frac": 0.002447916666666667,
-         "snr": 205.29223868373433
+         "noise": 85.17027282714844,
+         "saturated_frac": 0.0026041666666666665,
+         "snr": 203.84111346343303
         },
         "override": null,
         "reasons": [],
-        "score": 99.71176776830536
+        "score": 99.4090507794348
        },
        {
         "__dataclass__": "Decision",
@@ -771,28 +771,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.8779296875,
+         "background": 2106.1845703125,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:16:00",
-         "eccentricity": 0.1718587072565989,
+         "eccentricity": 0.3033614714227659,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_002.fits",
          "filter": "L",
-         "fwhm": 2.5877056700902,
+         "fwhm": 2.649844342870323,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
-         "n_stars": 27,
-         "noise": 84.733642578125,
-         "saturated_frac": 0.0025520833333333333,
-         "snr": 175.5896093428108
+         "n_stars": 28,
+         "noise": 85.02713775634766,
+         "saturated_frac": 0.00265625,
+         "snr": 198.10027980173854
         },
         "override": null,
         "reasons": [],
-        "score": 98.48846293020686
+        "score": 99.85287145350428
        },
        {
         "__dataclass__": "Decision",
@@ -801,28 +801,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.291015625,
+         "background": 2105.54248046875,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:19:00",
-         "eccentricity": 0.14484307291987286,
+         "eccentricity": 0.3028624325535851,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_003.fits",
          "filter": "L",
-         "fwhm": 2.602888168572204,
+         "fwhm": 2.6649749340335216,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.60197448730469,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 212.73737621686453
+         "noise": 84.62577819824219,
+         "saturated_frac": 0.0028125,
+         "snr": 211.22506222914208
         },
         "override": null,
         "reasons": [],
-        "score": 99.2579793650871
+        "score": 99.47365682763288
        },
        {
         "__dataclass__": "Decision",
@@ -831,28 +831,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.746337890625,
+         "background": 2105.901123046875,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:22:00",
-         "eccentricity": 0.1365695626675118,
+         "eccentricity": 0.2978453238953124,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_004.fits",
          "filter": "L",
-         "fwhm": 2.6009554656588754,
+         "fwhm": 2.6673474106086275,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
-         "n_stars": 26,
-         "noise": 84.88520812988281,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 182.58162223260425
+         "n_stars": 27,
+         "noise": 84.8675308227539,
+         "saturated_frac": 0.0027604166666666667,
+         "snr": 192.30205226525536
         },
         "override": null,
         "reasons": [],
-        "score": 98.82599594079068
+        "score": 99.56389828258524
        },
        {
         "__dataclass__": "Decision",
@@ -861,28 +861,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.69921875,
+         "background": 2106.24462890625,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:25:00",
-         "eccentricity": 0.1236312102764841,
+         "eccentricity": 0.29930626110084446,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_005.fits",
          "filter": "L",
-         "fwhm": 2.599047023519704,
+         "fwhm": 2.6612824107215856,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.837646484375,
-         "saturated_frac": 0.0025520833333333333,
-         "snr": 214.1887577519101
+         "noise": 85.11470794677734,
+         "saturated_frac": 0.0026041666666666665,
+         "snr": 212.28812901936195
         },
         "override": null,
         "reasons": [],
-        "score": 99.88742343820351
+        "score": 99.64078114469648
        },
        {
         "__dataclass__": "Decision",
@@ -891,28 +891,28 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2105.75341796875,
+         "background": 2105.9521484375,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:28:00",
-         "eccentricity": 0.15333216530868346,
+         "eccentricity": 0.310318771249946,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_006.fits",
          "filter": "L",
-         "fwhm": 2.590338906682758,
+         "fwhm": 2.6520321970716445,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
          "n_stars": 27,
-         "noise": 84.8831787109375,
-         "saturated_frac": 0.0026041666666666665,
-         "snr": 139.22952184686272
+         "noise": 85.01630401611328,
+         "saturated_frac": 0.0028125,
+         "snr": 138.7413654733082
         },
         "override": null,
         "reasons": [],
-        "score": 99.12673230288418
+        "score": 99.31245213534159
        },
        {
         "__dataclass__": "Decision",
@@ -921,24 +921,24 @@
         "metrics": {
          "__dataclass__": "FrameMetrics",
          "altitude": null,
-         "background": 2131.392333984375,
+         "background": 2131.468994140625,
          "camera": "TestCam",
          "date_obs": "2026-11-01T20:31:00",
-         "eccentricity": 0.8345278999193534,
+         "eccentricity": 0.8318084161677306,
          "error": null,
          "exposure": 120.0,
          "file": "<tmp>/lights/light_007.fits",
          "filter": "L",
-         "fwhm": 5.366318572205057,
+         "fwhm": 5.3881141284485965,
          "gain": 100.0,
          "iso": null,
          "moon_alt": null,
          "moon_illum": null,
          "moon_sep": null,
-         "n_stars": 23,
-         "noise": 137.6193084716797,
-         "saturated_frac": 0.01125,
-         "snr": 77.23428368428984
+         "n_stars": 24,
+         "noise": 138.13087463378906,
+         "saturated_frac": 0.011197916666666667,
+         "snr": 98.37782590420704
         },
         "override": null,
         "reasons": [
@@ -953,21 +953,21 @@
             ],
             [
              "ratio",
-             0.18976204798057458
+             0.2402752950322419
             ],
             [
              "score",
-             54.44523967660126
+             56.82004186853508
             ],
             [
              "threshold",
-             96.32712912188609
+             96.5160195585143
             ]
            ]
           }
          }
         ],
-        "score": 54.44523967660126
+        "score": 56.82004186853508
        }
       ]
      ],
@@ -989,9 +989,9 @@
      [
       "summary",
       [
-       "Reference (average of the best frames per metric): FWHM 2.59, eccentricity 0.13, star count 27, background 2105, SNR 210.7",
-       "Score mode 99.3, MAD 2.0, pass line 80",
-       "Keep threshold = 96.3 (set by the score distribution)"
+       "Reference (average of the best frames per metric): FWHM 2.65, eccentricity 0.30, star count 27, background 2106, SNR 209.1",
+       "Score mode 99.5, MAD 2.0, pass line 80",
+       "Keep threshold = 96.5 (set by the score distribution)"
       ]
      ],
      [
@@ -1000,7 +1000,7 @@
        "__dict__": [
         [
          "Filter L / 120s exposure",
-         96.32712912188609
+         96.5160195585143
         ]
        ]
       }

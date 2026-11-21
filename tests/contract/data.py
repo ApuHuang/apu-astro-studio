@@ -10,21 +10,29 @@ from astropy.io import fits
 
 def star_field(h: int = 96, w: int = 128, channels: int = 3, n: int = 40, seed: int = 7, sky: float = 0.05,
                noise: float = 0.002, gradient: float = 0.02, shift: tuple[float, float] = (0.0, 0.0),
-               fwhm: float = 2.6, elong: float = 1.0) -> np.ndarray:
-    """(C, H, W) float32 線性影像：天空＋線性光害梯度＋高斯星點（亮度跨三個數量級、有幾顆飽和到 1）＋噪聲。"""
+               fwhm: float = 2.6, elong: float = 1.0, angle: float = 30.0) -> np.ndarray:
+    """(C, H, W) float32 線性影像：天空＋線性光害梯度＋高斯星點（亮度跨三個數量級、有幾顆飽和到 1）＋噪聲。
+    elong：長軸／短軸，長軸方向 angle 度（不放 0 度：角度接近 0 時相對誤差沒有意義）。"""
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
     ys, xs = rng.uniform(4, h - 4, n), rng.uniform(4, w - 4, n)
     amps = 10 ** rng.uniform(-2.0, 0.6, n)
     colors = rng.uniform(0.7, 1.3, (n, channels))
     sx = fwhm / 2.3548
+    c, s_ = np.cos(np.radians(angle)), np.sin(np.radians(angle))
     img = np.zeros((channels, h, w))
     for y, x, a, col in zip(ys, xs, amps, colors):
-        g = np.exp(-(((xx - x - shift[1]) / (sx * elong)) ** 2 + ((yy - y - shift[0]) / sx) ** 2) / 2)
+        dx, dy = xx - x - shift[1], yy - y - shift[0]
+        u, v = dx * c + dy * s_, -dx * s_ + dy * c
+        g = np.exp(-((u / (sx * elong)) ** 2 + (v / sx) ** 2) / 2)
         img += a * col[:, None, None] * g[None]
     base = sky + gradient * (xx / w)[None] + np.linspace(0, 0.01, channels)[:, None, None]
     img = base + img + rng.normal(0, noise, (channels, h, w))
     return np.clip(img, 0, 1).astype(np.float32)
+
+
+# light 的星點：橢圓率約 0.3（長短軸比 1/√(1−0.3²)）。正圓的星方向角不穩定：Pick 量的方向角在不同 CPU 上差相對 2e-4
+ELONG = 1 / np.sqrt(1 - 0.3 ** 2)
 
 
 def write_frames(folder: Path, n_light: int = 6, n_dark: int = 3, size=(120, 160)) -> tuple[list[Path], list[Path]]:
@@ -35,7 +43,7 @@ def write_frames(folder: Path, n_light: int = 6, n_dark: int = 3, size=(120, 160
     for i in range(n_light):
         bad = i == n_light - 1
         img = star_field(h, w, 1, n=45, seed=11, sky=0.03, noise=0.0015, gradient=0.005,
-                         shift=(0.7 * i, -0.5 * i), fwhm=4.0 if bad else 2.6, elong=1.8 if bad else 1.0)[0]
+                         shift=(0.7 * i, -0.5 * i), fwhm=4.0 if bad else 2.6, elong=1.8 if bad else ELONG)[0]
         rng = np.random.default_rng(100 + i)
         data = (img * 40000 + 800 + rng.normal(0, 6, img.shape)).astype(np.float32)
         hdr = fits.Header()

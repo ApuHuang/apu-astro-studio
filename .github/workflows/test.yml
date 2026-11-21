@@ -67,4 +67,14 @@ jobs:
         working-directory: apu-astro-studio
         env:
           QT_QPA_PLATFORM: offscreen
+          # 契約測試把疊圖的過程（輸入順序、參考張、每張的對齊與排除像素）和 master 存在這裡，下一步上傳
+          APU_CONTRACT_ARTIFACTS: ${{ runner.temp }}/contract-artifacts
         run: python -m pytest -q
+      - name: 上傳契約測試的診斷檔
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-artifacts-${{ matrix.runner }}
+          path: ${{ runner.temp }}/contract-artifacts
+          if-no-files-found: ignore
+          retention-days: 14

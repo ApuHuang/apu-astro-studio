@@ -17,8 +17,8 @@
    "done",
    [
     [
-     "light_002.fits",
-     "light_004.fits",
+     "light_000.fits",
+     "light_001.fits",
      "light_006.fits",
      "light_007.fits"
     ],
@@ -29,8 +29,8 @@
    "dry",
    [
     [
-     "light_002.fits",
-     "light_004.fits",
+     "light_000.fits",
+     "light_001.fits",
      "light_006.fits",
      "light_007.fits"
     ],
@@ -45,11 +45,11 @@
    "log",
    [
     [
-     "light_002.fits",
+     "light_000.fits",
      "rejected"
     ],
     [
-     "light_004.fits",
+     "light_001.fits",
      "rejected"
     ],
     [
@@ -65,8 +65,8 @@
   [
    "restored",
    [
-    "light_002.fits",
-    "light_004.fits",
+    "light_000.fits",
+    "light_001.fits",
     "light_006.fits",
     "light_007.fits"
    ]

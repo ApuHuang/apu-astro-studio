@@ -151,8 +151,7 @@ def test_field(measured):
     root, folder, files, home_of, frames = measured
     results = [analyze_frame(p) for p in files[:3]]
     avg = combine(results)
-    # 星點方向角等擬合值在不同 CPU 上差相對 1e-5～2e-4（Windows／macOS 雲端都超過 1e-5）
-    check("pick_field", {"one": results[0], "avg": avg}, root, rel=1e-4)
+    check("pick_field", {"one": results[0], "avg": avg}, root)
 
 
 def test_detail_lines(measured, app):

@@ -54,7 +54,7 @@
      "dim"
     ],
     [
-     "L\t2112\t1859\t40821\t—\n",
+     "L\t2113\t1859\t40821\t—\n",
      ""
     ]
    ]
@@ -123,11 +123,11 @@
      ""
     ],
     [
-     "Score\t100.0 (threshold 96.3)\n",
+     "Score\t99.4 (threshold 96.5)\n",
      ""
     ],
     [
-     "Rank in group\t1 of 8\n",
+     "Rank in group\t6 of 8\n",
      ""
     ],
     [
@@ -139,15 +139,15 @@
      "head"
     ],
     [
-     "FWHM\t100% of reference × weight 35% → 35.0 pts (−0.0)\n",
+     "FWHM\t100% of reference × weight 35% → 34.9 pts (−0.1)\n",
      ""
     ],
     [
-     "Eccentricity\t100% of reference × weight 30% → 30.0 pts (−0.0)\n",
+     "Eccentricity\t99% of reference × weight 30% → 29.7 pts (−0.3)\n",
      ""
     ],
     [
-     "Stars\t100% of reference × weight 20% → 20.0 pts (−0.0)\n",
+     "Stars\t99% of reference × weight 20% → 19.8 pts (−0.2)\n",
      ""
     ],
     [
@@ -155,7 +155,7 @@
      ""
     ],
     [
-     "Total\t100.0\n",
+     "Total\t99.4\n",
      ""
     ],
     [
@@ -163,11 +163,11 @@
      "head"
     ],
     [
-     "FWHM\t2.59 px  median 2.60 px (-0%)  reference 2.59 px\n",
+     "FWHM\t2.66 px  median 2.66 px (-0%)  reference 2.65 px\n",
      ""
     ],
     [
-     "Eccentricity\t0.13  median 0.14 (-11%)  reference 0.13\n",
+     "Eccentricity\t0.31  median 0.30 (+0%)  reference 0.30\n",
      ""
     ],
     [
@@ -175,11 +175,11 @@
      ""
     ],
     [
-     "Background\t2106 ADU  median 2106 ADU (-0%)  reference 2105 ADU\n",
+     "Background\t2106 ADU  median 2106 ADU (-0%)  reference 2106 ADU\n",
      ""
     ],
     [
-     "SNR\t168.6  median 179.1 (-6%)  reference 210.7\n",
+     "SNR\t168.3  median 195.2 (-14%)  reference 209.1\n",
      ""
     ]
    ]
