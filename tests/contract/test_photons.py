@@ -178,8 +178,9 @@ def test_ingest(frames):
 
 
 @pytest.mark.xfail(sys.platform == "darwin", strict=True,
-                   reason="macOS（ARM）疊出來的 master 跟 Windows 差很多（99% 像素、最大相對差 13.9），原因調查中："
-                          "可能是選參考張時同分的排序不同。診斷檔見 workflow 的 contract-artifacts")
+                   reason="ARM 與 x86 的浮點差異：輸入順序、參考張、配對星數、排除像素數都一樣，但 Background2D 的 "
+                          "sigma clipping 與 FWHM 疊代（收斂門檻 1e-3）讓背景、FWHM 差相對 5e-4～1e-3，權重與對齊跟著變，"
+                          "master 中位數差 0.03 ADU、星核最大 42 ADU（峰值 4.2 萬）。容許誤差怎麼訂待使用者決定")
 def test_run(stacked):
     res, stages, root = stacked
     assert isinstance(res, Result)
