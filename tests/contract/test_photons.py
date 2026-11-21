@@ -28,12 +28,17 @@ from astropy.io import fits
 from .data import star_field, write_frames
 from .snap import REL, Display, check
 
-# 跨平台（macOS ARM 對 Windows x86）的數值容許誤差（使用者 2026-11-21）：離散的決定兩邊都要完全一樣，
-# 數值在 Windows 用 1e-5；macOS 的 master 每個像素差 ≤ 峰值的 1e-3，背景、權重、變換、FWHM 相對 2e-3。
-# 原因：ARM 與 x86 浮點最後幾位不同，被 Background2D 的 sigma clipping、FWHM 疊代（收斂門檻 1e-3）放大
+# 跨平台（macOS ARM 對 Windows x86）的比對（使用者 2026-11-21）：
+# 第一層：離散的決定（輸入順序、參考張、配對星數、排除像素數…）每個平台都完全一樣。
+# 第二層：數值。Windows 一律 1e-5；macOS 的門檻由誤差傳遞推算，不依實測值訂：
+# - 背景、FWHM、對齊變換：相對 2e-3。ARM 與 x86 浮點最後幾位不同，被 Background2D 的 sigma clipping 與
+#   FWHM 疊代（收斂門檻 1e-3）放大到 1e-3 等級，取 2 倍
+# - 權重：相對 1e-2。權重＝SNR²／FWHM²，兩個平方把輸入的相對誤差放大約 4 倍：2e-3 × 4 ≈ 8e-3，取 1e-2
+# - master：每個像素差 ≤ 峰值的 2e-3。權重與對齊的差傳到疊圖，星核的差約峰值的 1e-3，多留一倍餘裕
 MAC = sys.platform == "darwin"
 NUM_REL = 2e-3 if MAC else REL
-MASTER_FLOOR = 1e-3 if MAC else 1e-7
+WEIGHT_REL = 1e-2 if MAC else REL
+MASTER_FLOOR = 2e-3 if MAC else 1e-7
 
 # 疊圖頁 _plan 傳給 ingest 的參數（預設值）
 PLAN_ARGS = dict(kinds={}, filter_aliases={}, temp_tolerance=2.0, split_nights=True, flat_any_night=False,
@@ -206,16 +211,22 @@ def test_run_decisions(stacked):
 
 
 def test_run_numbers(stacked):
-    """第二層之一：各張的浮點量測（背景、權重、對齊變換、FWHM）。"""
+    """第二層之一：各張的浮點量測（背景、對齊變換、FWHM）。"""
     res, _stages, _root, diag = stacked
-    check("photons_run_numbers", {f["name"]: {"fwhm": f["fwhm"], "background": f["background"], "weight": f["weight"],
+    check("photons_run_numbers", {f["name"]: {"fwhm": f["fwhm"], "background": f["background"],
                                               "transform": None if f["transform"] is None
                                               else np.asarray(f["transform"], np.float64)}
                                   for f in diag["frames"]}, rel=NUM_REL)
 
 
+def test_run_weights(stacked):
+    """第二層之二：各張的權重（macOS 門檻見檔案開頭）。"""
+    res, _stages, _root, diag = stacked
+    check("photons_run_weights", {f["name"]: f["weight"] for f in diag["frames"]}, rel=WEIGHT_REL)
+
+
 def test_run(stacked):
-    """第二層之二：輸出的 master（macOS 每個像素差 ≤ 峰值的 1e-3）與輸出清單。"""
+    """第二層之三：輸出的 master（macOS 每個像素差 ≤ 峰值的 2e-3）與輸出清單。"""
     res, stages, root, _diag = stacked
     assert isinstance(res, Result)
     masters = {}
