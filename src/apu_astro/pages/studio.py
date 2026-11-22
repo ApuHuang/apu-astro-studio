@@ -667,7 +667,8 @@ class StudioPage(Page):
             title = step.label or str(tool.title)
             if br[i] in ("starless", "stars"):
                 title += "（" + str(T("無星圖", "starless") if br[i] == "starless" else T("星點", "stars")) + "）"
-            g = self._card(f"{i + 1}. {title}", str(tool.help), key=f"stage.{step.kind}")
+            g = self._card(f"{presets.display_numbers(self.chain.steps)[i]}. {title}", str(tool.help),
+                           key=f"stage.{step.kind}")
             on = Var(step.enabled)
             g.add(ParameterToggle(str(T("使用這一步", "Use this step")), on))
             on.subscribe(lambda v, s=step: self._set_enabled(s, v), g)
@@ -1354,10 +1355,12 @@ class StudioPage(Page):
         if step is None:
             parts.append(str(T("來源", "Source")))
         elif self.stage is not None and self._tool_mode != "crop":
-            parts.append(f"{presets.STAGES[self.stage]}（" + str(T(f"到第 {index + 1} 步", f"through step {index + 1}"))
+            no = presets.display_numbers(self.chain.steps)[index]
+            parts.append(f"{presets.STAGES[self.stage]}（" + str(T(f"到第 {no} 步", f"through step {no}"))
                          + "）")
         else:
-            parts.append(str(T(f"第 {index + 1} 步", f"Step {index + 1}")) + " " +
+            no = presets.display_numbers(self.chain.steps)[index]
+            parts.append(str(T(f"第 {no} 步", f"Step {no}")) + " " +
                          (step.label or str(tools_mod.get(step.kind).title)))
         mode = self.view_mode.get()
         if mode == "compare":
@@ -1388,8 +1391,8 @@ class StudioPage(Page):
             self._preview_key = key           # 這個參數組合顯示過用快速層統計的預覽
         elif getattr(self, "_preview_key", None) == key:
             self._preview_key = None
-            self.image.set_note(str(T("已改用完整解析度的統計（出圖的亮度與顏色）",
-                                      "Now using full-resolution statistics (as exported)")), 4000)
+            self.image.set_note(str(T("預覽已改用完整解析度的統計，跟出圖一致",
+                                      "The preview now uses full-resolution statistics, matching the export")), 4000)
 
     def _show_inset(self, index: int, mode: str, special_view: bool) -> None:
         """預覽區：完整解析度的那一塊疊在快速預覽上。參數改了正在重算時先顯示上一次的（外框變黃色虛線）。"""

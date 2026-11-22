@@ -254,7 +254,8 @@ class StepPanel(QFrame):
                               "stf": T("STF", "STF")}.get(s.params.get("method", "auto"))))
         if s.mask.get("mode", "all") != "all":
             parts.append(str(T("有遮罩", "Masked")))
-        row = StepRow(str(i + 1), tool.icon, title, " · ".join(parts), s.enabled, i in self.warn, branch, indent)
+        number = presets.display_numbers(self.steps)[i]      # 照畫面順序編號（分支分組後也連續）
+        row = StepRow(str(number), tool.icon, title, " · ".join(parts), s.enabled, i in self.warn, branch, indent)
         row.toggled.connect(lambda on, k=i: self._toggle(k, on))
         return row
 

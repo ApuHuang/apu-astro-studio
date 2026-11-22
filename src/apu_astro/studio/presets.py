@@ -148,6 +148,18 @@ def display_order(steps: list[ch.Step]) -> list[tuple[str, object]]:
     return rows
 
 
+def display_numbers(steps: list[ch.Step]) -> list[int]:
+    """每一步在畫面上的編號（1 起）：照完整清單的顯示順序（去星後依分支分組）重新編號，所以清單上是連續的。
+    只是顯示用：步驟鏈的實際順序、專案檔存的內容都不變。"""
+    out = [0] * len(steps)
+    n = 0
+    for row in display_order(steps):
+        if row[0] == "step":
+            n += 1
+            out[int(row[1])] = n
+    return out
+
+
 def neighbour_in_branch(steps: list[ch.Step], index: int, d: int) -> int | None:
     """上移／下移：同一組（同分支、同一段）裡的上一個／下一個步驟；分組外就是清單上的鄰居。"""
     order = [r for r in display_order(steps) if r[0] == "step"]

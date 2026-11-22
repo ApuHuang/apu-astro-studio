@@ -41,6 +41,21 @@ def test_branch_groups_and_merge_point():
     assert sorted(r[1] for r in rows if r[0] == "step") == list(range(len(steps)))    # 每一步都出現一次
 
 
+def test_display_numbers_follow_screen_order():
+    """阿噗流程的編號照畫面順序：無星圖分支 7–11、星點分支 12、合成星點 13；連續、不改步驟鏈本身。"""
+    steps = ch.default_steps(True)
+    before = presets.steps_to_dicts(steps)
+    nums = presets.display_numbers(steps)
+    shown = [nums[r[1]] for r in presets.display_order(steps) if r[0] == "step"]
+    assert shown == list(range(1, len(steps) + 1))
+    by = {i: nums[i] for i in range(len(steps))}
+    starless = [by[r[1]] for r in presets.display_order(steps) if r[0] == "step" and r[2] == "starless"]
+    stars = [by[r[1]] for r in presets.display_order(steps) if r[0] == "step" and r[2] == "stars"]
+    if len(steps) == 13:
+        assert starless == [7, 8, 9, 10, 11] and stars == [12] and nums[-1] == 13
+    assert presets.steps_to_dicts(steps) == before
+
+
 def test_move_within_branch_only():
     steps = ch.default_steps(True)
     stars_stretch = next(i for i, s in enumerate(steps) if s.kind == "stretch" and s.layer == "stars")
