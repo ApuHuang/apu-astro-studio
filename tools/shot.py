@@ -69,6 +69,10 @@ def main() -> int:
             page.view.set(view)
             pump(0.5)
     elif scenario == "process":
+        preset = os.environ.get("SHOT_PRESET")     # standard／apu／custom:名稱
+        if preset:
+            from apu_astro.settings import save_settings
+            save_settings(studio_preset=preset)
         win.step.set("process")
         page = win.page("process")
         page.open_paths([Path(a) for a in args])
@@ -76,6 +80,14 @@ def main() -> int:
         want = os.environ.get("SHOT_RES", "quick")
         last = len(page.chain.steps) - 1
         pump(600.0, lambda: page.chain.cached(last, want) is not None and (want == "quick" or page._job is None))
+        expand = os.environ.get("SHOT_EXPAND")     # 簡易顯示：展開哪幾個階段（0,1）
+        if expand:
+            for k in expand.split(","):
+                page._expand_stage(int(k))
+        stage = os.environ.get("SHOT_STAGE")       # 簡易顯示：選第幾個階段
+        if stage is not None:
+            page.steps_panel.select_stage(int(stage))
+            pump(120.0, lambda: page.chain.cached(page.selected, "quick") is not None and page._job is None)
         sel = os.environ.get("SHOT_STEP")
         if sel is not None:
             page.steps_panel.select(int(sel))

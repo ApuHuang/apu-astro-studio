@@ -651,9 +651,10 @@ class Chain:
 
     # ---------- 專案檔
 
-    def to_dict(self) -> dict:
-        return {"format": "apu-astro-studio/1", "source": self.source.to_dict() if self.source else None,
-                "steps": [s.to_dict() for s in self.steps]}
+    def to_dict(self, meta: dict | None = None) -> dict:
+        """專案檔內容（PROJECT_FORMAT）。meta：介面的設定（預設集、清單的顯示方式）。"""
+        return {"format": PROJECT_FORMAT, "source": self.source.to_dict() if self.source else None,
+                "steps": [s.to_dict() for s in self.steps], **(meta or {})}
 
 
 def display_of(state: State, layer: str = "combined", ref: State | None = None,
@@ -705,11 +706,29 @@ def _downsample_state(st: State, f: int) -> State:
     return out
 
 
-def save_project(chain: Chain, path: Path) -> None:
-    path.write_text(json.dumps(chain.to_dict(), ensure_ascii=False, indent=1), encoding="utf-8")
+# 專案檔格式：/1（0.1.x）＝來源＋步驟；/2（0.2.0）多了 preset（預設集）、view（清單顯示 simple／full）。
+# 讀得懂 /1 與 /2；/1 沒有預設集，用完整清單顯示（跟 0.1.x 看到的一樣）
+PROJECT_FORMAT = "apu-astro-studio/2"
+READABLE_FORMATS = ("apu-astro-studio/1", "apu-astro-studio/2")
 
 
-def load_project(path: Path) -> tuple[dict, list[Step]]:
+class ProjectFormatError(ValueError):
+    pass
+
+
+def save_project(chain: Chain, path: Path, meta: dict | None = None) -> None:
+    path.write_text(json.dumps(chain.to_dict(meta), ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def load_project(path: Path) -> tuple[dict, list[Step], dict]:
+    """回傳 (來源, 步驟, 介面設定 {"preset", "view"})。"""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    fmt = data.get("format", "apu-astro-studio/1")
+    if fmt not in READABLE_FORMATS:
+        raise ProjectFormatError(f"{fmt}")
     steps = [Step.from_dict(d) for d in data.get("steps", [])]
-    return data.get("source") or {}, steps
+    if fmt == "apu-astro-studio/1":
+        meta = {"preset": None, "view": "full"}
+    else:
+        meta = {"preset": data.get("preset"), "view": data.get("view", "full")}
+    return data.get("source") or {}, steps, meta

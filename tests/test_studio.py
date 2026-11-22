@@ -177,13 +177,15 @@ def test_project_roundtrip(tmp_path):
     c.steps[2].mask = {**masks.default_mask(), "mode": "dark"}
     path = tmp_path / "p.apuastro"
     ch.save_project(c, path)
-    src, steps = ch.load_project(path)
+    src, steps, _meta = ch.load_project(path)
     assert [s.kind for s in steps] == [s.kind for s in c.steps]
     assert steps[0].params["exclude"] == [[10, 10, 5, True]] and steps[2].mask["mode"] == "dark"
     assert src["paths"] == ["synthetic.fits"]
 
 
 def test_studio_page_opens_and_edits(app, window, tmp_path):
+    from apu_astro.settings import save_settings
+    save_settings(studio_preset="apu")           # 完整清單（阿噗流程）：一步一步選
     p = tmp_path / "m.xisf"
     _write_xisf(p, _star_field())
     window.step.set("process")

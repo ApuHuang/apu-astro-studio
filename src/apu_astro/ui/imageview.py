@@ -116,6 +116,7 @@ class ImageView(QWidget):
         self._cache_inset_cmp: tuple[tuple, QImage, QRectF] | None = None
         self.busy_text: str | None = None           # 重算中：角落的小標籤（畫面保留上一張）
         self.note_text: str | None = None           # 左下角的短暫說明（例如改用完整解析度的統計）
+        self.label_text: str | None = None          # 左上角的狀態標籤：現在看的是什麼
         self._note_timer = QTimer(self)
         self._note_timer.setSingleShot(True)
         self._note_timer.timeout.connect(lambda: self.set_note(None))
@@ -153,6 +154,12 @@ class ImageView(QWidget):
         """重算中：右下角顯示小小的進度（例如「預覽 40%」）；None 拿掉。畫面不清空。"""
         if text != self.busy_text:
             self.busy_text = text
+            self.update()
+
+    def set_label(self, text: str | None) -> None:
+        """左上角固定的狀態標籤（例如「第 2 步 去光梯度 · 背景模型 · 快速預覽」）。"""
+        if text != self.label_text:
+            self.label_text = text
             self.update()
 
     def set_note(self, text: str | None, ms: int = 0) -> None:
@@ -411,6 +418,8 @@ class ImageView(QWidget):
             self._paint_busy(p)
         if self.note_text:
             self._paint_note(p)
+        if self.label_text:
+            self._paint_label(p)
         if self.tool == "brush" and self._mouse.x() >= 0:
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             r = self.brush_radius * self.current_zoom()
@@ -484,6 +493,20 @@ class ImageView(QWidget):
         p.drawEllipse(QPointF(r.left() + 10, r.center().y()), 3.2, 3.2)
         p.setPen(QColor(255, 255, 255, 220))
         p.drawText(r.adjusted(18, 0, -6, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        p.restore()
+
+    def _paint_label(self, p: QPainter) -> None:
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(fonts().ui(8.5))
+        tw = p.fontMetrics().horizontalAdvance(self.label_text) + 20
+        r = QRectF(10, 10, min(tw, self.width() - 20), 22)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 150))
+        p.drawRoundedRect(r, 11, 11)
+        p.setPen(QColor(255, 255, 255, 225))
+        p.drawText(r.adjusted(10, 0, -10, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                   p.fontMetrics().elidedText(self.label_text, Qt.TextElideMode.ElideRight, int(r.width() - 20)))
         p.restore()
 
     def _paint_note(self, p: QPainter) -> None:

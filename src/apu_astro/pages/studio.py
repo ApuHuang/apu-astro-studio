@@ -17,12 +17,13 @@ from pathlib import Path
 import numpy as np
 from apu_processing import api as papi
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLineEdit,
-                               QMenu, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QInputDialog,
+                               QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout,
+                               QWidget)
 
 from .. import icons
 from ..settings import load_settings, save_settings
-from ..studio import backend, chain as ch, export, masks, ops
+from ..studio import backend, chain as ch, export, masks, ops, presets
 from ..studio import tools as tools_mod
 from ..studio.tools import T, Cancelled, RegionOutside
 from ..theme import D
@@ -73,6 +74,10 @@ class StudioPage(Page):
         self.export_opts = export.ExportOptions(**{k: v for k, v in (st.get("studio_export") or {}).items()
                                                    if k in export.ExportOptions.__dataclass_fields__})
         self.project_path: Path | None = None
+        self.preset: str | None = st.get("studio_preset", presets.STANDARD)    # 目前的預設集（None＝舊專案／自訂）
+        self.view_kind = presets.view_of(self.preset)                           # 清單：simple（4 階段）／full
+        self.stage: int | None = None                                          # 簡易顯示選到的階段
+        self.expanded: set[int] = set()
         self.loading = False
         self._job: _Job | None = None
         self._gen = 0
@@ -123,12 +128,20 @@ class StudioPage(Page):
                                                "full resolution (fast for tuning detail); click again to go back")),
                                  on_click=self._toggle_region)
         self.region_btn.setCheckable(True)
+        self.settings_btn = QPushButton()
+        self.settings_btn.setIcon(icons.icon("gear", D.label, 16))
+        self.settings_btn.setToolTip(str(T("預覽與效能", "Preview & performance")))
+        self.settings_menu = QMenu(self.settings_btn)
+        self.settings_menu.aboutToShow.connect(self._fill_settings_menu)
+        self.settings_btn.setMenu(self.settings_menu)
         self.export_btn = button(str(T("出圖", "Export")), "prominent",
                                  str(T("算完整解析度並存成 PNG／JPEG／TIFF／FITS（Ctrl+S）", "Render at full resolution and "
                                        "save as PNG/JPEG/TIFF/FITS (Ctrl+S)")), self.ask_export)
         self.steps_panel = StepPanel()
         self.steps_panel.build_add_menu(self.add_step)
         self.steps_panel.selected.connect(self.select)
+        self.steps_panel.stage_selected.connect(self.select_stage)
+        self.steps_panel.preset_action.connect(self._preset_action)
         self.steps_panel.structure_changed.connect(self._structure_changed)
         self.steps_panel.dup_btn.clicked.connect(self.duplicate_step)
         self.steps_panel.up_btn.clicked.connect(lambda: self.move_step(-1))
@@ -166,7 +179,8 @@ class StudioPage(Page):
         h.addWidget(center, 1)
         h.addWidget(self.inspector)
         ui = self.layout([self.layer_seg, self.view_seg],
-                         [self.region_btn, self.open_btn, self.project_btn, self.export_btn], body, None)
+                         [self.region_btn, self.settings_btn, self.open_btn, self.project_btn, self.export_btn],
+                         body, None)
         self._fill_steps()
         self._build_inspector()
         return ui
@@ -218,7 +232,8 @@ class StudioPage(Page):
             return
         self._load([p for p in paths if p.is_file()], None, None, None)
 
-    def _load(self, paths: list[Path], compose: dict | None, coverages: list | None, steps: list | None) -> None:
+    def _load(self, paths: list[Path], compose: dict | None, coverages: list | None, steps: list | None,
+              meta: dict | None = None) -> None:
         if not paths:
             return
         self.loading = True
@@ -230,21 +245,33 @@ class StudioPage(Page):
         def work() -> None:
             try:
                 src = ch.open_source(paths, compose, coverages)
-                post(("loaded", src, steps))
+                post(("loaded", src, steps, meta))
             except Exception as exc:  # noqa: BLE001
                 post(("error", -1, f"{exc}\n\n{traceback.format_exc()[-1200:]}"))
 
         run_thread(work, "studio-open")
 
-    def _loaded(self, src: ch.Source, steps: list | None) -> None:
+    def _loaded(self, src: ch.Source, steps: list | None, meta: dict | None = None) -> None:
         self.loading = False
         self.chain.set_source(src)
         self.chain.set_region(None)
         self._region_auto = False
         self._inset = None
         self._sync_region_btn()
-        self.chain.steps = steps if steps is not None else ch.default_steps(src.color, src.narrowband)
+        if steps is not None:
+            # 專案檔：照它存的預設集與顯示方式（/1 的舊專案沒有預設集，用完整清單）
+            meta = meta or {}
+            self.preset = meta.get("preset")
+            self.view_kind = meta.get("view") or presets.view_of(self.preset)
+            self.chain.steps = steps
+        else:
+            self.preset = load_settings().get("studio_preset", presets.STANDARD)
+            self.view_kind = self._preset_view(self.preset)
+            self.chain.steps = presets.template(self.preset or presets.STANDARD, src.color, src.narrowband,
+                                                self._custom_presets())
         self._last.clear()
+        self.stage = None
+        self.expanded = set()
         self.selected = len(self.chain.steps) - 1
         self._fill_steps()
         self._build_inspector()
@@ -263,9 +290,73 @@ class StudioPage(Page):
         src = self.chain.source
         if src is None:
             return
-        self.chain.steps = ch.default_steps(src.color, src.narrowband)
+        self.chain.steps = presets.template(self.preset or presets.STANDARD, src.color, src.narrowband,
+                                            self._custom_presets())
         self.selected = len(self.chain.steps) - 1
+        self.stage = None
         self._structure_changed()
+
+    # ------------------------------------------------------------------ 預設集
+
+    @staticmethod
+    def _custom_presets() -> dict:
+        return dict(load_settings().get("studio_presets") or {})
+
+    def _preset_view(self, preset: str | None) -> str:
+        if preset and preset.startswith(presets.CUSTOM):
+            data = self._custom_presets().get(preset[len(presets.CUSTOM):]) or {}
+            return data.get("view", presets.VIEW_FULL)
+        return presets.view_of(preset)
+
+    def _confirm(self, text: str) -> bool:
+        """問使用者（測試時換掉）。"""
+        return QMessageBox.question(self, str(T("預設集", "Preset")), text) == QMessageBox.StandardButton.Yes
+
+    def _ask_name(self) -> str | None:
+        name, ok = QInputDialog.getText(self, str(T("存成預設集", "Save as preset")),
+                                        str(T("預設集名稱：", "Preset name:")))
+        return name.strip() if ok and name.strip() else None
+
+    def _preset_action(self, action: str) -> None:
+        src = self.chain.source
+        if action.startswith("choose:"):
+            preset = action[len("choose:"):]
+            if src is not None:
+                current = presets.template(self.preset or presets.STANDARD, src.color, src.narrowband,
+                                           self._custom_presets())
+                if not presets.same_steps(self.chain.steps, current) and not self._confirm(str(T(
+                        "換預設集會換掉目前的步驟與參數，要繼續嗎？", "Switching presets replaces the current steps and "
+                        "settings. Continue?"))):
+                    self._fill_steps()
+                    return
+            self.preset = preset
+            self.view_kind = self._preset_view(preset)
+            save_settings(studio_preset=preset)
+            if src is not None:
+                self.reset_steps()
+            else:
+                self._fill_steps()
+        elif action == "save":
+            name = self._ask_name()
+            if not name or not self.chain.steps:
+                return
+            custom = self._custom_presets()
+            custom[name] = {"steps": presets.steps_to_dicts(self.chain.steps), "view": self.view_kind}
+            save_settings(studio_presets=custom)
+            self.preset = presets.CUSTOM + name
+            save_settings(studio_preset=self.preset)
+            self._fill_steps()
+            self.set_status(lambda: str(T(f"已存成預設集「{name}」", f"Saved preset “{name}”")))
+        elif action.startswith("delete:"):
+            name = action[len("delete:"):]
+            custom = self._custom_presets()
+            custom.pop(name, None)
+            save_settings(studio_presets=custom)
+            if self.preset == presets.CUSTOM + name:
+                self.preset = None
+            if load_settings().get("studio_preset") == presets.CUSTOM + name:
+                save_settings(studio_preset=presets.STANDARD)
+            self._fill_steps()
 
     # ------------------------------------------------------------------ 專案
 
@@ -277,7 +368,11 @@ class StudioPage(Page):
 
     def open_project(self, path: Path) -> None:
         try:
-            source, steps = ch.load_project(path)
+            source, steps, meta = ch.load_project(path)
+        except ch.ProjectFormatError as exc:
+            error(self, str(T(f"這個專案檔是比較新的版本建立的（{exc}），請更新 APU Astro。",
+                              f"This project was made by a newer version ({exc}); please update APU Astro.")))
+            return
         except Exception as exc:  # noqa: BLE001
             error(self, str(exc))
             return
@@ -287,7 +382,7 @@ class StudioPage(Page):
         if missing:
             error(self, str(T("找不到專案的來源檔：\n", "Source files not found:\n")) + "\n".join(map(str, missing[:5])))
             return
-        self._load(paths, source.get("compose"), source.get("coverages"), steps)
+        self._load(paths, source.get("compose"), source.get("coverages"), steps, meta)
 
     def ask_save_project(self) -> None:
         if self.chain.source is None:
@@ -299,7 +394,7 @@ class StudioPage(Page):
             p = Path(path)
             if p.suffix.lower() != PROJECT_SUFFIX:
                 p = p.with_suffix(PROJECT_SUFFIX)
-            ch.save_project(self.chain, p)
+            ch.save_project(self.chain, p, {"preset": self.preset, "view": self.view_kind})
             self.project_path = p
             self.set_status(lambda: str(T(f"專案已存：{p.name}", f"Project saved: {p.name}")))
 
@@ -314,7 +409,9 @@ class StudioPage(Page):
             h, w = src.image.shape[-2:]
             sub = f"{w}×{h} · " + (str(T("彩色", "Colour")) if src.color else str(T("單色", "Mono")))
         warn = {i for i, r in self._step_warnings().items() if r}
-        self.steps_panel.set_steps(self.chain.steps, src.title() if src else "", sub, self.selected, warn)
+        self.steps_panel.set_presets(self.preset, sorted(self._custom_presets()))
+        self.steps_panel.set_steps(self.chain.steps, src.title() if src else "", sub, self.selected, warn,
+                                   self.view_kind, self.stage, self.expanded)
 
     def _step_warnings(self) -> dict[int, list]:
         out = {}
@@ -347,9 +444,10 @@ class StudioPage(Page):
             self._structure_changed()
 
     def move_step(self, d: int) -> None:
+        """上下移：去星後的分支分組裡，跟同一組的上一個／下一個交換（不同分支互不影響，不跨組移）。"""
         i = self.selected
-        j = i + d
-        if 0 <= i < len(self.chain.steps) and 0 <= j < len(self.chain.steps):
+        j = presets.neighbour_in_branch(self.chain.steps, i, d) if 0 <= i < len(self.chain.steps) else None
+        if j is not None:
             s = self.chain.steps
             s[i], s[j] = s[j], s[i]
             self.selected = j
@@ -379,14 +477,30 @@ class StudioPage(Page):
         return sep
 
     def select(self, index: int) -> None:
-        if index == self.selected and hasattr(self, "_built_for") and self._built_for == index:
+        if index == self.selected and self.stage is None and getattr(self, "_built_for", None) == (index, None):
             return
         self.selected = index
+        self.stage = None
         self._set_tool(None)
         self._build_inspector()
         self.refresh_view()
         cached = self.chain.cached(index, "quick") if self.chain.source else None
         if self.chain.source is not None and cached is None:
+            self._request("quick")
+        else:
+            self._detail_timer()
+
+    def select_stage(self, stage: int) -> None:
+        """簡易顯示：選一個階段 → 畫面顯示這個階段最後一步的結果，右邊是這個階段的關鍵滑桿。"""
+        members = presets.stage_steps(self.chain.steps, stage)
+        if not members:
+            return
+        self.stage = stage
+        self.selected = members[-1]
+        self._set_tool(None)
+        self._build_inspector()
+        self.refresh_view()
+        if self.chain.source is not None and self.chain.cached(self.selected, "quick") is None:
             self._request("quick")
         else:
             self._detail_timer()
@@ -399,7 +513,7 @@ class StudioPage(Page):
     def _build_inspector(self) -> None:
         if not hasattr(self, "inspector"):
             return
-        self._built_for = self.selected
+        self._built_for = (self.selected, self.stage)
         inner = QWidget()
         inner.setStyleSheet(f"background: {D.chrome};")
         lay = QVBoxLayout(inner)
@@ -411,11 +525,12 @@ class StudioPage(Page):
         step = self.current_step()
         if self.chain.source is None:
             lay.addWidget(label(str(T("還沒有開啟影像", "Nothing open yet")), D.secondary))
+        elif self.stage is not None:
+            self._build_stage(lay, self.stage)
         elif step is None:
             self._build_source(lay)
         else:
             self._build_step(lay, step)
-        lay.addWidget(self._build_settings())
         lay.addStretch(1)
         old = self.inspector.takeWidget()
         if old is not None:
@@ -537,6 +652,61 @@ class StudioPage(Page):
         lay.addWidget(g)
         if tool.maskable:
             lay.addWidget(self._build_mask(step))
+
+    def _build_stage(self, lay: QVBoxLayout, stage: int) -> None:
+        """簡易顯示：一個階段裡每一步的開關與關鍵滑桿（其他參數展開細步驟才看得到）。"""
+        head = QWidget()
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(4, 0, 4, 0)
+        hl.addWidget(label(str(presets.STAGES[stage]), D.label, 11, bold=True), 1)
+        lay.addWidget(head)
+        br = presets.branch_of(self.chain.steps)
+        for i in presets.stage_steps(self.chain.steps, stage):
+            step = self.chain.steps[i]
+            tool = tools_mod.get(step.kind)
+            title = step.label or str(tool.title)
+            if br[i] in ("starless", "stars"):
+                title += "（" + str(T("無星圖", "starless") if br[i] == "starless" else T("星點", "stars")) + "）"
+            g = self._card(f"{i + 1}. {title}", str(tool.help), key=f"stage.{step.kind}")
+            on = Var(step.enabled)
+            g.add(ParameterToggle(str(T("使用這一步", "Use this step")), on))
+            on.subscribe(lambda v, s=step: self._set_enabled(s, v), g)
+            specs = {c.get("key"): c for c in tool.controls()}
+            for key in presets.key_params(step):
+                spec = specs.get(key)
+                if spec is not None:
+                    w = self._control(spec, step)
+                    if w is not None:
+                        g.add(w)
+            lay.addWidget(g)
+        more = button(str(T("展開細步驟（全部參數）", "Show the detailed steps (all settings)")),
+                      on_click=lambda: self._expand_stage(stage))
+        lay.addWidget(more)
+
+    def _set_enabled(self, step: ch.Step, on: bool) -> None:
+        step.enabled = bool(on)
+        self._fill_steps()
+        self.schedule()
+
+    def _expand_stage(self, stage: int) -> None:
+        self.expanded.add(stage)
+        self._fill_steps()
+
+    def _fill_settings_menu(self) -> None:
+        """頁首齒輪：預覽與效能（全域設定，不屬於任何一步）。"""
+        m = self.settings_menu
+        m.clear()
+        full = m.addAction(str(T("停手後算完整解析度", "Render full resolution when idle")))
+        full.setCheckable(True)
+        full.setChecked(bool(self.full_preview.get()))
+        full.toggled.connect(lambda v: self.full_preview.set(bool(v)))
+        gpu = m.addAction(str(T("使用 GPU", "Use GPU")))
+        gpu.setCheckable(True)
+        gpu.setChecked(bool(self.gpu_on.get()))
+        gpu.toggled.connect(lambda v: self.gpu_on.set(bool(v)))
+        name = backend.device_name() if self.gpu_on.get() else None
+        info = m.addAction(name or str(T("（沒有可用的 NVIDIA GPU，用 CPU）", "(no NVIDIA GPU; using CPU)")))
+        info.setEnabled(False)
 
     def _set_layer(self, step: ch.Step, layer: str) -> None:
         step.layer = layer
@@ -742,14 +912,6 @@ class StudioPage(Page):
         self._visibility.append((brush, lambda p: p.get("mode") == "brush", m))
         g.add(ParameterSlider(str(T("羽化", "Feather")), self._bind(m, "feather"), 0, 100, lambda v: f"{v:.0f} px", 1))
         g.add(ParameterToggle(str(T("反轉", "Invert")), self._bind(m, "invert")))
-        return g
-
-    def _build_settings(self) -> PanelGroup:
-        g = self._card(str(T("預覽與效能", "Preview & performance")), key="studio_settings")
-        g.add(ParameterToggle(str(T("停手後算完整解析度", "Render full resolution when idle")), self.full_preview))
-        g.add(ParameterToggle(str(T("使用 GPU", "Use GPU")), self.gpu_on))
-        name = backend.device_name() if self.gpu_on.get() else None
-        g.add(label(name or str(T("（沒有可用的 NVIDIA GPU，用 CPU）", "(no NVIDIA GPU; using CPU)")), D.secondary, 8))
         return g
 
     def _update_visibility(self) -> None:
@@ -1051,7 +1213,7 @@ class StudioPage(Page):
     def _handle(self, ev: tuple) -> None:
         kind = ev[0]
         if kind == "loaded":
-            self._loaded(ev[1], ev[2])
+            self._loaded(ev[1], ev[2], ev[3] if len(ev) > 3 else None)
         elif kind == "recomposed":
             self.chain.source_changed()
             self.title_changed.emit()
@@ -1143,6 +1305,7 @@ class StudioPage(Page):
         self.layer_seg.setVisible(r.state.separated)
         disp = self.chain.display(r, self.layer_view.get())
         self._note_stats(index, r)
+        self.image.set_label(self._status_label(index, r))
         if step is not None and step.kind == "gradient" and self._tool_mode != "crop":
             view = step.params.get("view", "result")
             if view in ("model", "removed") and r.views.get("model" if view == "model" else "removed") is not None:
@@ -1183,6 +1346,39 @@ class StudioPage(Page):
                 except RuntimeError:
                     self._curve_editor = None
         self._refresh_summary()
+
+    def _status_label(self, index: int, r: ch.Result) -> str:
+        """左上角：現在看的是什麼（哪一步／階段、對照或遮罩、哪一層、步驟內的子檢視、解析度、預覽區）。"""
+        parts = []
+        step = self.chain.steps[index] if 0 <= index < len(self.chain.steps) else None
+        if step is None:
+            parts.append(str(T("來源", "Source")))
+        elif self.stage is not None and self._tool_mode != "crop":
+            parts.append(f"{presets.STAGES[self.stage]}（" + str(T(f"到第 {index + 1} 步", f"through step {index + 1}"))
+                         + "）")
+        else:
+            parts.append(str(T(f"第 {index + 1} 步", f"Step {index + 1}")) + " " +
+                         (step.label or str(tools_mod.get(step.kind).title)))
+        mode = self.view_mode.get()
+        if mode == "compare":
+            parts.append(str(T("對照前後", "Before/after")))
+        elif mode == "mask":
+            parts.append(str(T("遮罩", "Mask")))
+        if r.state.separated:
+            parts.append(str({"combined": T("合成", "Combined"), "starless": T("無星圖", "Starless"),
+                              "stars": T("星點層", "Stars")}[self.layer_view.get()]))
+        cur = self.current_step()
+        if cur is not None and cur.kind == "gradient" and self._tool_mode != "crop":
+            sv = cur.params.get("view", "result")
+            if sv != "result":
+                parts.append(str({"samples": T("取樣", "Samples"), "model": T("背景模型", "Model"),
+                                  "removed": T("扣掉的", "Removed")}.get(sv, T("", ""))))
+        parts.append(str({"inter": T("互動預覽", "Live preview"), "quick": T("快速預覽", "Preview"),
+                          "full": T("完整解析度", "Full resolution")}.get(r.res, T("預覽區", "Preview area"))))
+        if self.image.inset is not None or (self.chain.region is not None and mode != "mask"):
+            parts.append(str(T("放大處完整解析度", "zoomed area at full res") if self._region_auto
+                             else T("預覽區完整解析度", "preview area at full res")))
+        return " · ".join(p for p in parts if p)
 
     def _note_stats(self, index: int, r: ch.Result) -> None:
         """預覽先用快速層的統計；完整解析度算完後改用它的（畫面會跳一下）：那一次在角落註明。"""
