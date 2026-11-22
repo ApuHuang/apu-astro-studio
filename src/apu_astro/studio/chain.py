@@ -3,9 +3,11 @@
 - 每一步記住輸入、參數與結果。改了第 k 步，只重算 k 之後；前面的結果沿用
 - 解析度：inter（互動層：快速層再縮小 INTER_FACTOR 倍，拖滑桿時）、quick（縮小，放手時）、full（完整，停手後背景算）、
   region（預覽區：只算框起來的那一塊，完整解析度）
-- 統計一律沿用快速層（0.2.0）：需要整張統計的步驟（背景模型、白平衡、天空、拉伸參數、遮罩與顯示的自動拉伸）在
-  inter／full／region 都從 quick 的同一步輸入量（ctx.ref），量到的值依輸入快取、各解析度共用（ctx.stats）。
-  解析度之間畫面不跳，拖滑桿時也不用每次重量
+- 整張統計（背景模型、白平衡、天空、拉伸參數、遮罩與顯示的自動拉伸）：完整解析度一律自己量（出圖跟 0.1.x 一樣），
+  量到的值依「這一步、這個輸入」存起來（_stats 的 "full"），回灌給快速層、互動層、預覽區；完整解析度還沒算過時，
+  預覽用快速層量的（"quick"；互動層、預覽區從快速層同一步的輸入量，ctx.ref）。拖滑桿時統計不用重量
+- 去星：完整解析度算過後，結果縮小存起來（_split_full），去星和上游的參數都沒變（輸入鍵一樣）時快速層、互動層直接沿用；
+  沿用時快速層、互動層的快取鍵加上記號，下游自動重算
 - 去星把一層分成 starless／stars 兩層，後面的步驟各自選要作用在哪一層，合成星點再合回一層
 - 完整解析度的結果很大（2000 萬像素彩色一層約 240 MB），超過記憶體上限就丟掉最久沒用的，要用時從最近的結果重算
 
@@ -32,6 +34,7 @@ from .tools import geometry as tgeometry
 
 QUICK_LONG_SIDE = 1800
 INTER_FACTOR = 2          # 互動層＝快速層再縮小幾倍（整數，面積平均）
+INTER_MIN_QUICK = 800     # 快速層長邊不到這麼大就不用互動層（小圖快速層本來就快；縮太小降噪等工具會出錯）
 REGION_PAD = 128          # 預覽區四周多算的寬度（反摺積、降噪、補星點在邊緣要有鄰近的像素）
 REGION_MAX = 2600         # 預覽區最大邊長
 UI_ONLY = {"view", "brush"}
@@ -242,8 +245,12 @@ class Chain:
         self._cache: OrderedDict[tuple[str, int], tuple[str, State, dict]] = OrderedDict()
         self._analysis: dict[tuple[str, str], tuple[str, dict]] = {}
         self._source_states: dict[str, State] = {}
-        self._stats: OrderedDict[tuple[str, str], dict] = OrderedDict()   # (步驟 id, 輸入鍵) → 從快速層量的統計
-        self._disp_memo: OrderedDict[tuple, tuple] = OrderedDict()        # 顯示用自動拉伸的參數（從快速層量）
+        # (步驟 id, 輸入鍵, "full"／"quick") → 那個解析度量的整張統計
+        self._stats: OrderedDict[tuple[str, str, str], dict] = OrderedDict()
+        # (第幾步的輸入鍵, 顯示的層) → ("full"／"quick", 顯示用自動拉伸的參數)
+        self._disp_memo: OrderedDict[tuple, tuple] = OrderedDict()
+        self._split_full: dict[str, tuple[str, State]] = {}       # 去星步驟 id → (輸入鍵, 完整解析度結果縮到快速層)
+        self._full_keys: OrderedDict[str, None] = OrderedDict()    # 完整解析度算過的步驟鍵
         self.source_revision = 0
         self.region: tuple[int, int, int, int] | None = None    # 預覽區（來源影像的座標 y0, x0, y1, x1）
         self._source_psf = None                                    # 原圖的星點形狀（反摺積用，量一次）
@@ -262,6 +269,8 @@ class Chain:
             self._source_states.clear()
             self._stats.clear()
             self._disp_memo.clear()
+            self._split_full.clear()
+            self._full_keys.clear()
 
     def source_changed(self) -> None:
         """來源影像換了（例如合成的強度）：全部重算。"""
@@ -272,6 +281,13 @@ class Chain:
             return 1
         longest = max(self.source.image.shape[-2:])
         return max(1, int(np.ceil(longest / QUICK_LONG_SIDE)))
+
+    def inter_ok(self) -> bool:
+        """這張圖要不要用互動層（快速層夠大才用）。"""
+        if self.source is None or self.source.image is None:
+            return False
+        longest = max(self.source.image.shape[-2:]) // self.quick_factor()
+        return longest >= INTER_MIN_QUICK
 
     def scale(self, res: str) -> float:
         if res == "quick":
@@ -350,13 +366,48 @@ class Chain:
 
     # ---------- 快取
 
-    def _keys(self, steps: list[Step]) -> list[str]:
+    def _base_keys(self, steps: list[Step]) -> list[str]:
+        """每一步的鍵＝這一步與上游所有參數的 hash（跟解析度無關）。"""
         h = hashlib.sha1(f"src{self.source_revision}".encode())
         out = []
         for s in steps:
             h = hashlib.sha1(h.digest() + s.key_part().encode())
             out.append(h.hexdigest())
         return out
+
+    def _keys(self, steps: list[Step], res: str = "full") -> list[str]:
+        """快取用的鍵：快速層、互動層在去星沿用完整解析度的結果時，從那一步起加記號（下游跟自己算的分開快取）。"""
+        base = self._base_keys(steps)
+        if res not in ("quick", "inter") or not self._split_full:
+            return base
+        h = hashlib.sha1(f"src{self.source_revision}".encode())
+        out = []
+        for i, s in enumerate(steps):
+            part = s.key_part().encode()
+            if self._split_reuse(s, base[i]) is not None:
+                part += b"|full-split"
+            h = hashlib.sha1(h.digest() + part)
+            out.append(h.hexdigest())
+        return out
+
+    def _split_reuse(self, step: Step, key: str) -> State | None:
+        """這一步是去星、而且完整解析度算過同樣參數（含上游）的：回傳縮到快速層的結果。"""
+        if not step.enabled or step.kind != "star_split":
+            return None
+        hit = self._split_full.get(step.id)
+        return hit[1] if hit is not None and hit[0] == key else None
+
+    def full_ready(self, index: int, steps: list[Step] | None = None) -> bool:
+        """第 index 步（含上游）用目前的參數算過完整解析度：預覽用的是完整解析度的統計。"""
+        steps = steps if steps is not None else self.steps
+        if self.source is None or index < 0 or index >= len(steps):
+            return False
+        with self._lock:
+            return self._base_keys(steps)[index] in self._full_keys
+
+    def base_key(self, index: int, steps: list[Step] | None = None) -> str:
+        steps = steps if steps is not None else self.steps
+        return self._base_keys(steps)[index] if 0 <= index < len(steps) else f"src{self.source_revision}"
 
     def _source_state(self, res: str) -> State:
         st = self._source_states.get(res)
@@ -397,7 +448,7 @@ class Chain:
                 return None
             if index < 0:
                 return Result(self._source_state(res), {}, -1, res)
-            keys = self._keys(steps)
+            keys = self._keys(steps, res)
             hit = self._cache.get((res, index))
             if hit is not None and hit[0] == keys[index]:
                 self._cache.move_to_end((res, index))
@@ -410,7 +461,9 @@ class Chain:
         steps = steps if steps is not None else self.snapshot()
         upto = min(upto, len(steps) - 1)
         with self._lock:
-            keys = self._keys(steps)
+            keys = self._keys(steps, res)
+            base = self._base_keys(steps)
+            qkeys = keys if res in ("quick", "inter") else self._keys(steps, "quick")
             start, state, views = -1, self._source_state(res), {}
             for i in range(upto, -1, -1):
                 hit = self._cache.get((res, i))
@@ -430,17 +483,22 @@ class Chain:
                 "header": self.source.header if self.source else None,
                 "source_psf": self.source_psf, "spike_angle": self.source_spike_angle}
         region = res.startswith("region:")
-        if (res == "full" or region) and start < upto:
-            # 完整解析度、預覽區：每一步的輸入在快速預覽的樣子（量整張統計用）；通常已經算好在快取裡
+        if region and start < upto:
+            # 預覽區：每一步的輸入在快速預覽的樣子（還沒有完整解析度的統計時從這裡量）；通常已經算好在快取裡
             self.evaluate(upto, "quick", steps, cancel)
         for i in range(start + 1, upto + 1):
             if cancel():
                 raise Cancelled()
             step = steps[i]
             views = {}
-            if step.enabled:
+            reuse = self._split_reuse(step, base[i]) if res in ("quick", "inter") else None
+            if reuse is not None:
+                # 去星：完整解析度算過同樣參數的，直接縮小沿用（快速層抓不到 1～2 px 的暗星）
+                state = reuse if res == "quick" else _downsample_state(reuse, INTER_FACTOR)
+            elif step.enabled:
                 tool = get(step.kind)
                 in_key = keys[i - 1] if i > 0 else f"src{self.source_revision}"
+                in_base = base[i - 1] if i > 0 else f"src{self.source_revision}"
                 akey = (step.id, res)
                 with self._lock:
                     prev = self._analysis.get(akey)
@@ -448,12 +506,17 @@ class Chain:
                 ctx = Ctx(scale, cancel, lambda f, s, i=i: progress((i + f) / (upto + 1), s), acache, meta, views)
                 if step.kind in ("deconv", "star_split"):
                     ctx.frame_ops = self._geometry_ops(i - 1, steps) if i > 0 else []
-                ref = None if res == "quick" else self._quick_input(i, keys, required=res != "inter")
-                if ref is not None:
-                    ctx.ref = ref
-                    ctx.ref_scale = float(self.quick_factor())
-                if res == "quick" or ref is not None:
-                    ctx.stats = self._stats_for(step.id, in_key)
+                if res == "full":
+                    # 完整解析度：自己量（跟 0.1.x 一樣），量到的存起來回灌給預覽
+                    ctx.stats = self._stats_for(step.id, in_base, "full")
+                else:
+                    ref = None if res == "quick" else self._quick_input(i, qkeys, required=region)
+                    if ref is not None:
+                        ctx.ref = ref
+                        ctx.ref_scale = float(self.quick_factor())
+                    ctx.stats = self._stats_for(step.id, in_base, "quick") if res == "quick" or ref is not None else {}
+                    full_stats = self._stats_get(step.id, in_base, "full")
+                    ctx.stats_read = (full_stats,) if full_stats else ()
                 ctx.interactive = res == "inter"
                 if region:
                     ctx.region = state.region
@@ -470,8 +533,22 @@ class Chain:
                 self._cache[(res, i)] = (keys[i], state, views)
                 self._cache.move_to_end((res, i))
                 self._evict()
+                if res == "full":
+                    self._mark_full(base[i])
+                    if step.enabled and step.kind == "star_split" and self.source is not None:
+                        self._split_full[step.id] = (base[i], _downsample_state(state, self.quick_factor()))
+        if res == "full":
+            with self._lock:
+                for i in range(0, start + 1):
+                    self._mark_full(base[i])
         progress(1.0, "")
         return Result(state, views, upto, res)
+
+    def _mark_full(self, key: str) -> None:
+        self._full_keys[key] = None
+        self._full_keys.move_to_end(key)
+        while len(self._full_keys) > 512:
+            self._full_keys.popitem(last=False)
 
     def source_psf(self):
         """原圖（完整解析度）的星點形狀 3×3 區（psf.PSFGrid），第一次用到時量。"""
@@ -506,10 +583,14 @@ class Chain:
             raise RuntimeError("quick result missing")
         return hit[1]
 
-    def _stats_for(self, step_id: str, in_key: str) -> dict:
-        """這一步、這個輸入從快速層量的統計（各解析度共用；輸入變了就換一份）。"""
+    def _stats_get(self, step_id: str, in_key: str, source: str) -> dict | None:
         with self._lock:
-            key = (step_id, in_key)
+            return self._stats.get((step_id, in_key, source))
+
+    def _stats_for(self, step_id: str, in_key: str, source: str) -> dict:
+        """這一步、這個輸入在某個解析度（"full"／"quick"）量的整張統計；輸入變了就換一份。"""
+        with self._lock:
+            key = (step_id, in_key, source)
             d = self._stats.get(key)
             if d is None:
                 d = self._stats[key] = {}
@@ -527,23 +608,27 @@ class Chain:
             if index < 0:
                 return self._source_state("quick")
             hit = self._cache.get(("quick", index))
-            if hit is None or hit[0] != self._keys(steps)[index]:
+            if hit is None or hit[0] != self._keys(steps, "quick")[index]:
                 return None
             return hit[1]
 
     def display(self, result: Result, layer: str = "combined") -> np.ndarray:
-        """結果的顯示影像。線性的層：自動拉伸的參數一律從快速層的同一步量（各解析度畫面一致），量過就記住。"""
-        ref = None if result.res == "quick" else self.quick_state(result.index)
-        src = ref if ref is not None else result.state
-        key = (id(src), layer)
+        """結果的顯示影像。線性的層的自動拉伸參數：完整解析度量自己的（跟 0.1.x 一樣）並記住；
+        快速層、互動層、預覽區用記住的完整解析度參數，還沒有的話用快速層量的。"""
+        key = (self.base_key(result.index), layer)
         with self._lock:
-            memo = self._disp_memo.get(key)
-            if memo is None or memo[0] is not src:
-                memo = (src, {})
-                self._disp_memo[key] = memo
-                while len(self._disp_memo) > 64:
-                    self._disp_memo.popitem(last=False)
-        return display_of(result.state, layer, ref, memo[1])
+            full = self._disp_memo.get(key + ("full",))
+            if result.res == "full" and full is None:
+                full = self._disp_memo[key + ("full",)] = {}
+            quick = self._disp_memo.get(key + ("quick",))
+            if result.res != "full" and quick is None:
+                quick = self._disp_memo[key + ("quick",)] = {}
+            while len(self._disp_memo) > 128:
+                self._disp_memo.popitem(last=False)
+        if result.res == "full":
+            return display_of(result.state, layer, None, full)
+        ref = None if result.res == "quick" else self.quick_state(result.index)
+        return display_of(result.state, layer, ref, quick, full)
 
     def region_display(self, result: Result, layer: str = "combined") -> tuple[np.ndarray, tuple[int, int]] | None:
         """預覽區結果的顯示影像（只有使用者框的範圍）與左上角在這一步座標的位置 (x, y)。
@@ -572,10 +657,13 @@ class Chain:
 
 
 def display_of(state: State, layer: str = "combined", ref: State | None = None,
-               memo: dict | None = None) -> np.ndarray:
+               memo: dict | None = None, memo_read: dict | None = None) -> np.ndarray:
     """給畫面看的 0–1 影像：線性的層自動拉伸；分離星點時可以看無星圖、星點層或合起來的樣子。
-    ref：自動拉伸的參數從這個狀態量（預覽區、完整解析度、互動層用快速層）。memo：記住量過的拉伸參數（同一個 ref）。"""
+    ref：自動拉伸的參數從這個狀態量（預覽區、互動層用快速層）。memo：記住量過的拉伸參數（同一個 ref）；
+    memo_read：優先用的參數（完整解析度量的），沒有才自己量、記在 memo。"""
     def auto(img: np.ndarray, w: np.ndarray | None, name: str) -> np.ndarray:
+        if memo_read and name in memo_read:
+            return ops.apply_stf(img, memo_read[name], linked=False)
         if memo is None:
             return ops.auto_display(img, w)
         if name not in memo:

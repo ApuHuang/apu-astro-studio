@@ -57,7 +57,7 @@ class ColorCalibration(Tool):
             gains = tuple(1 + (g - 1) * k for g in bal.gains)
             ctx.view["gains"] = gains
             noise = ctx.stat(("noise", lay), lambda: papi.measure_stretch_noise(whole, scale))
-            wtops = ctx.stat(("tops", lay), lambda: [float(c.max()) for c in whole])
+            wtops = [float(c.max()) for c in whole]
             tops = [max(float(img[c].max()), wtops[c]) for c in range(img.shape[0])]
             # 飽和區只跟影像有關（跟倍率無關）：依輸入快取，拖強度時不用重找
             near = ctx.cache.get(("sat", lay))
@@ -69,16 +69,19 @@ class ColorCalibration(Tool):
                 if gains is None:
                     w = whole
                 else:
-                    wnear = ctx.stat(("sat_whole", lay), lambda: psf.saturation_mask(whole, tops=wtops))
+                    # 遮罩跟解析度有關：放這個解析度自己的快取，不放回灌的統計
+                    wnear = ctx.cache.get(("sat_whole", lay))
+                    if wnear is None:
+                        wnear = ctx.cache[("sat_whole", lay)] = psf.saturation_mask(whole, tops=wtops)
                     w = _apply_gains(whole, gains, noise.sky, wtops, scale, wnear)
                 return np.asarray(papi.measure_stretch_noise(w, scale).sky, np.float32)
 
-            last = ctx.stats.get(("neutral_sky_last", lay))
+            last = ctx.peek(("neutral_sky_last", lay))
             if ctx.interactive and last is not None:
                 sky = last          # 拖曳中（互動層）沿用這個輸入上次量的天空，放手後快速層重量（凍結統計）
             else:
                 sky = ctx.stat(("neutral_sky", lay, gains), neutral_sky)
-                ctx.stats[("neutral_sky_last", lay)] = sky
+                ctx.put(("neutral_sky_last", lay), sky)
             out = out - (sky - sky.mean())[:, None, None]
         return out.astype(np.float32)
 

@@ -66,14 +66,18 @@ class Deconvolution(Tool):
         round_at, sharp_at = self._kernels(L, stars, params, ctx)
         # 飽和星核：不參與比對（往外擴 2 px），結果也保持原值
         whole = ctx.whole(img)
-        wtops = ctx.stat(("tops", ctx.layer), lambda: [float(c.max()) for c in whole])
-        tops = [max(float(img[c].max()), wtops[c]) for c in range(img.shape[0])]
+        tops = [max(float(img[c].max()), float(whole[c].max())) for c in range(img.shape[0])]
         sat = psf.saturation_mask(img, tops=tops)
         valid = ~ndimage.binary_dilation(sat, iterations=2) if sat.any() else None
         sky, sig = ops.robust_stats(L)
-        if ctx.ref is not None:      # 天空從快速層的整張量（預覽區這一塊可能整片都是星雲）
+        full_sky = ctx.peek(("sky_own", ctx.layer)) if ctx.stats_read else None
+        if full_sky is not None:     # 完整解析度量過：天空用它的
+            sky = full_sky
+        elif ctx.ref is not None:    # 天空從快速層的整張量（預覽區這一塊可能整片都是星雲）
             sky = ctx.stat(("sky", ctx.layer), lambda: ops.robust_stats(
                 ops.luminance(whole) if img.shape[0] > 1 else whole[0])[0])
+        else:
+            ctx.put(("sky_own", ctx.layer), sky)
         pedestal = sky - 5 * max(sig, 1e-9)
         tile, pad = max(256, int(1024 / ctx.scale)), max(24, int(64 / ctx.scale))
         W = stars.weight.astype(np.float32)

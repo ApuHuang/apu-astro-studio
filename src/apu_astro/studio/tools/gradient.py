@@ -127,30 +127,29 @@ class Gradient(Tool):
 
     def apply(self, img: np.ndarray, params: dict, ctx: Ctx, linear: bool) -> np.ndarray:
         C, h, w = img.shape
-        if ctx.ref is not None:
-            # 互動層、完整解析度、預覽區：背景面用快速層擬合（依輸入與參數快取），再取這一塊的位置
-            whole = ctx.whole(img)
-            fit_key = json.dumps({k: v for k, v in params.items() if k not in ("view", "brush", "mode")},
-                                 sort_keys=True, default=str)
-            fitted = ctx.stat(("fit", ctx.layer, fit_key), lambda: self._fit_views(whole, params, ctx))
-            surfaces_w, views = fitted
+        fit_key = ("fit", ctx.layer, json.dumps({k: v for k, v in params.items() if k not in ("view", "brush", "mode")},
+                                                sort_keys=True, default=str))
+        fitted = ctx.peek(fit_key)
+        if fitted is None and ctx.ref is None:
+            # 完整解析度、快速層（還沒有完整解析度的）：在自己身上擬合（完整解析度跟 0.1.x 一樣），存起來回灌給預覽
+            surfaces = self._fit(img, params, ctx.scale, ctx, view=True)
+            ctx.put(fit_key, (surfaces, {"sky_cells": ctx.view.get("sky_cells")}, ctx.scale))
+            if surfaces is None:
+                return img
+            med = np.median(surfaces.reshape(C, -1), axis=1)[:, None, None]
+        else:
+            # 用存起來的背景面（完整解析度的，沒有的話快速層的），取這一塊、這個解析度的樣子
+            if fitted is None:
+                whole = ctx.whole(img)
+                fitted = ctx.stat(fit_key, lambda: (*self._fit_views(whole, params, ctx), ctx.whole_scale))
+            surfaces_w, views, f = fitted
             if surfaces_w is None:
                 return img
             if ctx.region is None:
                 ctx.view["sky_cells"] = views.get("sky_cells")
-                ctx.view["sky_cells_scale"] = ctx.whole_scale
-            f = ctx.whole_scale
-            ox, oy = ctx.origin
-            ys = np.clip((oy + np.arange(h) + 0.5) / f - 0.5, 0, surfaces_w.shape[1] - 1)
-            xs = np.clip((ox + np.arange(w) + 0.5) / f - 0.5, 0, surfaces_w.shape[2] - 1)
-            surfaces = np.stack([RectBivariateSpline(np.arange(sw.shape[0]), np.arange(sw.shape[1]), sw, kx=1, ky=1)(
-                ys, xs) for sw in surfaces_w]).astype(np.float32)
+                ctx.view["sky_cells_scale"] = f
+            surfaces = _resample(surfaces_w, f, ctx.scale, ctx.origin, (h, w))
             med = np.median(surfaces_w.reshape(C, -1), axis=1)[:, None, None]
-        else:
-            surfaces = self._fit(img, params, ctx.scale, ctx, view=True)
-            if surfaces is None:
-                return img
-            med = np.median(surfaces.reshape(C, -1), axis=1)[:, None, None]
         if params.get("mode") == "divide":
             return (img / np.maximum(surfaces / np.maximum(med, 1e-9), 1e-3)).astype(np.float32)
         removed = surfaces - med
@@ -224,6 +223,31 @@ class Gradient(Tool):
             ctx.view["model"] = surfaces
             ctx.view["sky_cells"] = (mask, cell)
         return surfaces
+
+
+def _resample(surfaces: np.ndarray, f: float, scale: float, origin: tuple[float, float],
+              shape: tuple[int, int]) -> np.ndarray:
+    """背景面（一個像素＝完整尺寸 f 個像素）→ 這個解析度（scale）、從 origin 開始、shape 大小的樣子。
+    背景面很平滑：整數倍縮小用面積平均、一樣大小直接裁，其他用雙線性內插。"""
+    h, w = shape
+    ox, oy = origin
+    C = surfaces.shape[0]
+    if abs(scale - f) < 1e-9 and float(ox / f).is_integer() and float(oy / f).is_integer():
+        y0, x0 = int(round(oy / f)), int(round(ox / f))
+        out = surfaces[:, y0:y0 + h, x0:x0 + w]
+        if out.shape[1:] == (h, w):
+            return np.ascontiguousarray(out, np.float32)
+    k = scale / f
+    if ox == 0 and oy == 0 and k > 1 and abs(k - round(k)) < 1e-9:
+        k = int(round(k))
+        hh, ww = surfaces.shape[1] // k * k, surfaces.shape[2] // k * k
+        small = surfaces[:, :hh, :ww].reshape(C, hh // k, k, ww // k, k).mean(axis=(2, 4))
+        if small.shape[1] >= h and small.shape[2] >= w:
+            return np.ascontiguousarray(small[:, :h, :w], np.float32)
+    ys = np.clip((oy + (np.arange(h) + 0.5) * scale) / f - 0.5, 0, surfaces.shape[1] - 1)
+    xs = np.clip((ox + (np.arange(w) + 0.5) * scale) / f - 0.5, 0, surfaces.shape[2] - 1)
+    return np.stack([RectBivariateSpline(np.arange(sw.shape[0]), np.arange(sw.shape[1]), sw, kx=1, ky=1)(ys, xs)
+                     for sw in surfaces]).astype(np.float32)
 
 
 register(Gradient())

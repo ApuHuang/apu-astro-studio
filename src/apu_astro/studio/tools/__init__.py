@@ -72,12 +72,26 @@ class Ctx:
     full_input: np.ndarray | None = None          # 預覽區且這一步的輸入就是來源時：整張完整解析度的輸入
     notes: dict = field(default_factory=dict)     # 輸入狀態的各層附註（State.notes）
     frame_ops: list | None = None                 # 前面的裁切／旋轉／翻轉（chain._geometry_ops），換算回原圖座標用
-    # 從快速層量的整張統計（這一步、這個輸入；各解析度共用）。ctx.whole() 量到的東西放這裡，拖滑桿時不用重量
+    # 整張統計（這一步、這個輸入）：stats 是這個解析度量的、寫在這裡；stats_read 是優先讀的（完整解析度量的，
+    # 回灌給快速層、互動層、預覽區）。完整解析度只用自己的（出圖跟 0.1.x 一樣）
     stats: dict = field(default_factory=dict)
+    stats_read: tuple = ()
     interactive: bool = False                     # 互動層（拖曳中）：可以沿用上次量的統計，放手後快速層重算
 
+    def peek(self, key, default=None):
+        for d in (*self.stats_read, self.stats):
+            if key in d:
+                return d[key]
+        return default
+
+    def put(self, key, value) -> None:
+        self.stats[key] = value
+
     def stat(self, key, fn: Callable[[], object]):
-        """整張統計：同一個輸入只量一次（各解析度共用；鍵要含影響結果的參數）。"""
+        """整張統計：同一個輸入只量一次（鍵要含影響結果的參數與 ctx.layer）。有完整解析度量的就用它的。"""
+        for d in self.stats_read:
+            if key in d:
+                return d[key]
         if key not in self.stats:
             self.stats[key] = fn()
         return self.stats[key]

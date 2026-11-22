@@ -67,17 +67,19 @@ class Stretch(Tool):
         whole = ctx.whole(img)       # 拉伸參數從整張量（預覽區時用整張的縮圖）
         lay = ctx.layer
         if method == "auto":
-            noise = ctx.stat(("stretch_noise", lay), lambda: papi.measure_stretch_noise(
-                whole[0] if whole.shape[0] == 1 else whole, ctx.whole_scale))
-            # 降噪的影響抵銷掉（見 tools/__init__.py 的 DENOISE_SIGMA_FACTOR）：開不開 AI、降噪開多強，
-            # 拉伸的深淺都一樣，只是乾不乾淨
-            notes = (ctx.ref.notes if ctx.ref is not None else ctx.notes).get(ctx.layer, {})
-            rl, rc = notes.get("denoise_ratio", (1.0, [1.0] * len(noise.channel_sigma)))
-            sl = noise.sigma * rl * DENOISE_SIGMA_FACTOR
-            sc = tuple(v * r * DENOISE_SIGMA_FACTOR for v, r in zip(noise.channel_sigma, rc))
-            # 暗處微弱訊號的量是「差值／噪聲」，跟著換成同一個噪聲（不然背景色、黑點會偏）
-            noise = dataclasses.replace(noise, sigma=sl, channel_sigma=sc,
-                                        faint_amount=noise.faint_amount * noise.sigma / max(sl, 1e-12))
+            def measure() -> papi.StretchNoise:
+                noise = papi.measure_stretch_noise(whole[0] if whole.shape[0] == 1 else whole, ctx.whole_scale)
+                # 降噪的影響抵銷掉（見 tools/__init__.py 的 DENOISE_SIGMA_FACTOR）：開不開 AI、降噪開多強，
+                # 拉伸的深淺都一樣，只是乾不乾淨。降噪倍數跟噪聲在同一個解析度量（回灌時兩個一起換）
+                notes = (ctx.ref.notes if ctx.ref is not None else ctx.notes).get(ctx.layer, {})
+                rl, rc = notes.get("denoise_ratio", (1.0, [1.0] * len(noise.channel_sigma)))
+                sl = noise.sigma * rl * DENOISE_SIGMA_FACTOR
+                sc = tuple(v * r * DENOISE_SIGMA_FACTOR for v, r in zip(noise.channel_sigma, rc))
+                # 暗處微弱訊號的量是「差值／噪聲」，跟著換成同一個噪聲（不然背景色、黑點會偏）
+                return dataclasses.replace(noise, sigma=sl, channel_sigma=sc,
+                                           faint_amount=noise.faint_amount * noise.sigma / max(sl, 1e-12))
+
+            noise = ctx.stat(("stretch_noise", lay), measure)
             s = papi.StretchSettings(background=float(params.get("background", 0.13)),
                                          strength=float(params.get("strength", 0.5)),
                                          linked=bool(params.get("linked", True)),

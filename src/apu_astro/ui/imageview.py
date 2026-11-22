@@ -115,6 +115,10 @@ class ImageView(QWidget):
         self._cache_inset: tuple[tuple, QImage, QRectF] | None = None
         self._cache_inset_cmp: tuple[tuple, QImage, QRectF] | None = None
         self.busy_text: str | None = None           # 重算中：角落的小標籤（畫面保留上一張）
+        self.note_text: str | None = None           # 左下角的短暫說明（例如改用完整解析度的統計）
+        self._note_timer = QTimer(self)
+        self._note_timer.setSingleShot(True)
+        self._note_timer.timeout.connect(lambda: self.set_note(None))
 
     # ------------------------------------------------------------------ 工具與疊色
 
@@ -150,6 +154,14 @@ class ImageView(QWidget):
         if text != self.busy_text:
             self.busy_text = text
             self.update()
+
+    def set_note(self, text: str | None, ms: int = 0) -> None:
+        """左下角顯示一段說明，ms 毫秒後消失（0：一直顯示）；None 拿掉。"""
+        self.note_text = text
+        self._note_timer.stop()
+        if text and ms > 0:
+            self._note_timer.start(ms)
+        self.update()
 
     def visible_box(self) -> tuple[float, float, float, float] | None:
         """畫面上看得到的範圍（完整尺寸的座標 x0, y0, x1, y1，夾在影像內）。"""
@@ -397,6 +409,8 @@ class ImageView(QWidget):
             self._paint_crop(p)
         if self.busy_text:
             self._paint_busy(p)
+        if self.note_text:
+            self._paint_note(p)
         if self.tool == "brush" and self._mouse.x() >= 0:
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             r = self.brush_radius * self.current_zoom()
@@ -470,6 +484,19 @@ class ImageView(QWidget):
         p.drawEllipse(QPointF(r.left() + 10, r.center().y()), 3.2, 3.2)
         p.setPen(QColor(255, 255, 255, 220))
         p.drawText(r.adjusted(18, 0, -6, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        p.restore()
+
+    def _paint_note(self, p: QPainter) -> None:
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(fonts().ui(8.5))
+        tw = p.fontMetrics().horizontalAdvance(self.note_text) + 20
+        r = QRectF(10, self.height() - 30, tw, 20)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 160))
+        p.drawRoundedRect(r, 10, 10)
+        p.setPen(QColor("#9fd4ff"))
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.note_text)
         p.restore()
 
     def _paint_inset_frame(self, p: QPainter) -> None:

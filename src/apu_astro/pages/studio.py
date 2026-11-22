@@ -955,8 +955,12 @@ class StudioPage(Page):
         self._quick_timer.start()
         self._throttle_inter()
 
+    def _live_res(self) -> str:
+        """拖曳中用哪一層：互動層；圖小（快速層本來就快）的話直接用快速層。"""
+        return "inter" if self.chain.inter_ok() else "quick"
+
     def _throttle_inter(self) -> None:
-        if self._job is not None and self._job.res == "inter":
+        if self._job is not None and self._job.res == self._live_res() and self._quick_timer.isActive():
             self._inter_pending = True          # 上一張互動層還在算：算完再排
             return
         wait = THROTTLE_MS / 1000 - (time.time() - self._inter_started)
@@ -975,7 +979,7 @@ class StudioPage(Page):
         if index < 0 or self.chain.cached(index, "quick") is not None:
             return
         self._inter_started = time.time()
-        self._request("inter")
+        self._request(self._live_res())
 
     def _view_index(self) -> int:
         """畫面要顯示第幾步的結果（裁切時顯示裁切前）。"""
@@ -1004,19 +1008,22 @@ class StudioPage(Page):
         post = self.bridge.post
         self._busy_since = time.time()
 
-        warm = res == "quick" and 0 <= index < len(steps) and tools_mod.get(steps[index].kind).cost == "cheap"
+        cheap = 0 <= index < len(steps) and tools_mod.get(steps[index].kind).cost == "cheap"
 
         def work() -> None:
             try:
                 r = self.chain.evaluate(index, res, steps, job.cancelled.is_set,
                                         lambda f, s: post(("progress", job.gen, f, s, res)))
                 post(("result", job.gen, r))
-                if warm:
-                    # cheap 步驟：先把互動層的輸入與分析快取備好（幾十毫秒），下次拖曳第一格就不用等
-                    try:
+                try:
+                    if res == "full":
+                        # 完整解析度算完：快速層改用它的統計與去星結果重算（之後的預覽、拖曳跟出圖一致）
+                        self.chain.evaluate(index, "quick", steps, job.cancelled.is_set)
+                    if res in ("quick", "full") and cheap and self.chain.inter_ok():
+                        # cheap 步驟：先把互動層的輸入與分析快取備好（幾十毫秒），下次拖曳第一格就不用等
                         self.chain.evaluate(index, "inter", steps, job.cancelled.is_set)
-                    except Exception:  # noqa: BLE001  （只是預熱，失敗不影響）
-                        pass
+                except Exception:  # noqa: BLE001  （只是預熱，失敗不影響）
+                    pass
             except Cancelled:
                 post(("cancelled", job.gen))
             except RegionOutside:
@@ -1070,6 +1077,8 @@ class StudioPage(Page):
                 if self._inter_pending:
                     self._throttle_inter()
                 return
+            if r.res == "quick" and self._inter_pending:     # 小圖：拖曳中直接用快速層節流
+                self._throttle_inter()
             took = time.time() - self._busy_since
             res = r.res
             text = (T(f"預覽完成（{took:.1f} 秒）", f"Preview ready ({took:.1f} s)") if res == "quick"
@@ -1133,6 +1142,7 @@ class StudioPage(Page):
         scale = self.chain.scale(r.res)
         self.layer_seg.setVisible(r.state.separated)
         disp = self.chain.display(r, self.layer_view.get())
+        self._note_stats(index, r)
         if step is not None and step.kind == "gradient" and self._tool_mode != "crop":
             view = step.params.get("view", "result")
             if view in ("model", "removed") and r.views.get("model" if view == "model" else "removed") is not None:
@@ -1173,6 +1183,17 @@ class StudioPage(Page):
                 except RuntimeError:
                     self._curve_editor = None
         self._refresh_summary()
+
+    def _note_stats(self, index: int, r: ch.Result) -> None:
+        """預覽先用快速層的統計；完整解析度算完後改用它的（畫面會跳一下）：那一次在角落註明。"""
+        key = self.chain.base_key(index)
+        full = r.res == "full" or self.chain.full_ready(index)
+        if not full:
+            self._preview_key = key           # 這個參數組合顯示過用快速層統計的預覽
+        elif getattr(self, "_preview_key", None) == key:
+            self._preview_key = None
+            self.image.set_note(str(T("已改用完整解析度的統計（出圖的亮度與顏色）",
+                                      "Now using full-resolution statistics (as exported)")), 4000)
 
     def _show_inset(self, index: int, mode: str, special_view: bool) -> None:
         """預覽區：完整解析度的那一塊疊在快速預覽上。參數改了正在重算時先顯示上一次的（外框變黃色虛線）。"""
@@ -1266,6 +1287,10 @@ class StudioPage(Page):
             if self.image.inset is not None:
                 tag += (str(T(" · 放大處是完整解析度", " · zoomed area at full resolution")) if self._region_auto
                         else str(T(" · 預覽區是完整解析度", " · preview area at full resolution")))
+            if res is not None and res.res != "full":
+                tag += (str(T(" · 統計：完整解析度", " · stats: full resolution"))
+                        if self.chain.full_ready(self._view_index())
+                        else str(T(" · 統計：預覽（出圖可能略有不同）", " · stats: preview (export may differ slightly)")))
             self.set_summary(f"{z}%{tag}")
         else:
             self.set_summary("")
