@@ -117,6 +117,16 @@ def main() -> int:
                 page.image.set_zoom(float(zoom))
                 page.image.cx, page.image.cy = (x0 + x1) / 2, (y0 + y1) / 2
                 page.image.update()
+        autozoom = os.environ.get("SHOT_AUTOZOOM")   # 放大到這個倍率（看自動預覽區），畫面中心 cx,cy 用 SHOT_CENTER
+        if autozoom:
+            center = os.environ.get("SHOT_CENTER")
+            page.image.set_zoom(float(autozoom) / page.image.devicePixelRatioF())
+            if center:
+                page.image.cx, page.image.cy = (float(v) for v in center.split(","))
+                page.image._emit_zoom()
+            idx = page._view_index()
+            pump(300.0, lambda: page.chain.region_res() is not None and page.image.inset is not None
+                 and page._job is None)
         pump(1.5)
     elif scenario == "flow":
         # 疊圖 → 送去後製：flow <輸出資料夾> <檔案或資料夾...>；另外存 <輸出>_stack.png

@@ -280,7 +280,7 @@ class StepPanel(QFrame):
             on = any(self.steps[i].enabled for i in members)
             row = StageRow(k + 1, str(title), names or str(T("（都關著）", "(all off)")), k in self.expanded, on)
             row.expand.connect(lambda k=k: self._toggle_expand(k))
-            self._add_row(row, ("stage", k), 56)
+            self._add_row(row, ("stage", k), 72)
             if k in self.expanded:
                 br = presets.branch_of(self.steps)
                 for i in members:

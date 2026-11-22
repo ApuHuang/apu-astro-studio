@@ -471,7 +471,8 @@ class ImageView(QWidget):
             if not text:
                 continue
             w = p.fontMetrics().horizontalAdvance(text) + 18
-            r = QRectF(12 if left else self.width() - w - 12, 12, w, 24)
+            top = 40 if self.label_text else 12          # 左上角有狀態標籤時往下讓
+            r = QRectF(12 if left else self.width() - w - 12, top, w, 24)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(0, 0, 0, 160))
             p.drawRoundedRect(r, 6, 6)
@@ -499,14 +500,14 @@ class ImageView(QWidget):
         p.save()
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setFont(fonts().ui(8.5))
-        tw = p.fontMetrics().horizontalAdvance(self.label_text) + 20
+        tw = p.fontMetrics().horizontalAdvance(self.label_text) + 28
         r = QRectF(10, 10, min(tw, self.width() - 20), 22)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(0, 0, 0, 150))
         p.drawRoundedRect(r, 11, 11)
         p.setPen(QColor(255, 255, 255, 225))
         p.drawText(r.adjusted(10, 0, -10, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                   p.fontMetrics().elidedText(self.label_text, Qt.TextElideMode.ElideRight, int(r.width() - 20)))
+                   p.fontMetrics().elidedText(self.label_text, Qt.TextElideMode.ElideRight, int(r.width() - 16)))
         p.restore()
 
     def _paint_note(self, p: QPainter) -> None:
