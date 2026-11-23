@@ -54,8 +54,20 @@ def frames(tmp_path_factory) -> tuple[Path, list[Path], list[Path]]:
 
 @pytest.fixture(scope="module")
 def stacked(frames, tmp_path_factory):
-    """疊圖頁 _start 的呼叫方式（CPU、單一行程，結果才每台機器一樣）。"""
     folder, lights, darks = frames
+    return _stack(folder, lights, darks, "photons_run")
+
+
+@pytest.fixture(scope="module")
+def stacked_osc(tmp_path_factory):
+    """彩色相機（OSC，RGGB）：疊圖時要解馬賽克（單色那組碰不到這一段）。"""
+    folder = tmp_path_factory.mktemp("photons_osc") / "data"
+    lights, darks = write_frames(folder, bayer="RGGB")
+    return _stack(folder, lights, darks, "photons_run_osc")
+
+
+def _stack(folder: Path, lights: list[Path], darks: list[Path], tag: str):
+    """疊圖頁 _start 的呼叫方式（CPU、單一行程，結果才每台機器一樣）。"""
     out = folder.parent / "out"
     # 不自動裁邊：裁邊依覆蓋率門檻決定，對齊的浮點差一點就差一列（macOS 雲端 115 列 vs Windows 116 列），輸出尺寸要固定
     s = Settings(gpu="cpu", workers=1, crop_common=False)
@@ -86,7 +98,7 @@ def stacked(frames, tmp_path_factory):
     finally:
         photons_engine._rank_frames, photons_engine.register_many = real_rank, real_reg
     _collect_diag(res, diag)
-    _save_diag(res, diag)
+    _save_diag(res, diag, tag)
     return res, stages, folder.parent, diag
 
 
@@ -108,12 +120,12 @@ def _collect_diag(res, diag: dict) -> None:
                       for f in res.project.files if f.kind == "light"]
 
 
-def _save_diag(res, diag: dict) -> None:
+def _save_diag(res, diag: dict, tag: str = "photons_run") -> None:
     """APU_CONTRACT_ARTIFACTS 有設時（雲端），把疊圖的過程與結果存下來給 workflow 上傳，比較不同平台為什麼結果不同。"""
     dest = os.environ.get("APU_CONTRACT_ARTIFACTS")
     if not dest:
         return
-    dest = Path(dest) / "photons_run"
+    dest = Path(dest) / tag
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "diag.json").write_text(json.dumps(diag, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     for o in res.outputs:
@@ -196,11 +208,11 @@ def test_ingest(frames):
     })
 
 
-def test_run_decisions(stacked):
+def _decisions(stacked, name):
     """第一層：離散的決定，每個平台都要完全一樣（輸入順序、參考張、各張偵測／配對到的星數、排除的像素數、收了哪幾張）。"""
     res, _stages, _root, diag = stacked
     frames = diag["frames"]
-    check("photons_run_decisions", {
+    check(name, {
         "files_order": diag["files_order"],
         "references": diag["references"],
         "detected_stars": {f["name"]: f["n_stars"] for f in frames},
@@ -210,22 +222,22 @@ def test_run_decisions(stacked):
     })
 
 
-def test_run_numbers(stacked):
+def _numbers(stacked, name):
     """第二層之一：各張的浮點量測（背景、對齊變換、FWHM）。"""
     res, _stages, _root, diag = stacked
-    check("photons_run_numbers", {f["name"]: {"fwhm": f["fwhm"], "background": f["background"],
-                                              "transform": None if f["transform"] is None
-                                              else np.asarray(f["transform"], np.float64)}
-                                  for f in diag["frames"]}, rel=NUM_REL)
+    check(name, {f["name"]: {"fwhm": f["fwhm"], "background": f["background"],
+                             "transform": None if f["transform"] is None
+                             else np.asarray(f["transform"], np.float64)}
+                 for f in diag["frames"]}, rel=NUM_REL)
 
 
-def test_run_weights(stacked):
+def _weights(stacked, name):
     """第二層之二：各張的權重（macOS 門檻見檔案開頭）。"""
     res, _stages, _root, diag = stacked
-    check("photons_run_weights", {f["name"]: f["weight"] for f in diag["frames"]}, rel=WEIGHT_REL)
+    check(name, {f["name"]: f["weight"] for f in diag["frames"]}, rel=WEIGHT_REL)
 
 
-def test_run(stacked):
+def _masters(stacked, name):
     """第二層之三：輸出的 master（macOS 每個像素差 ≤ 峰值的 2e-3）與輸出清單。"""
     res, stages, root, _diag = stacked
     assert isinstance(res, Result)
@@ -233,7 +245,7 @@ def test_run(stacked):
     for o in res.outputs:
         with fits.open(o.output) as h:
             masters[o.output.name] = np.asarray(h[0].data, np.float32)
-    check("photons_run", {
+    check(name, {
         "stages": stages,
         "outputs": [(o.align, o.filter, o.output.relative_to(root).as_posix(),
                      o.coverage.relative_to(root).as_posix() if o.coverage else None,
@@ -242,6 +254,39 @@ def test_run(stacked):
         "masters": masters,
         "accepted": sorted(f.path.name for o in res.outputs for f in o.frames),
     }, floor=MASTER_FLOOR)
+
+
+def test_run_decisions(stacked):
+    _decisions(stacked, "photons_run_decisions")
+
+
+def test_run_numbers(stacked):
+    _numbers(stacked, "photons_run_numbers")
+
+
+def test_run_weights(stacked):
+    _weights(stacked, "photons_run_weights")
+
+
+def test_run(stacked):
+    _masters(stacked, "photons_run")
+
+
+# 彩色相機（OSC）：解馬賽克、彩色的權重與正規化（單色那組碰不到）。換解馬賽克的方法時這幾項會變
+def test_run_osc_decisions(stacked_osc):
+    _decisions(stacked_osc, "photons_run_osc_decisions")
+
+
+def test_run_osc_numbers(stacked_osc):
+    _numbers(stacked_osc, "photons_run_osc_numbers")
+
+
+def test_run_osc_weights(stacked_osc):
+    _weights(stacked_osc, "photons_run_osc_weights")
+
+
+def test_run_osc(stacked_osc):
+    _masters(stacked_osc, "photons_run_osc")
 
 
 def test_load_recipe(stacked):

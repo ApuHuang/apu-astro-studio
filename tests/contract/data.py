@@ -35,21 +35,36 @@ def star_field(h: int = 96, w: int = 128, channels: int = 3, n: int = 40, seed: 
 ELONG = 1 / np.sqrt(1 - 0.3 ** 2)
 
 
-def write_frames(folder: Path, n_light: int = 6, n_dark: int = 3, size=(120, 160)) -> tuple[list[Path], list[Path]]:
-    """單色天文相機的 light（星點稍微位移；最後一張星點拉長、比較糊）與 dark，ADU、16-bit 範圍的 FITS。"""
+def mosaic(rgb: np.ndarray, pattern: str) -> np.ndarray:
+    """(3, H, W) → 單一平面的 Bayer 馬賽克（pattern 例如 "RGGB"：左上 2×2 的顏色）。"""
+    out = np.zeros(rgb.shape[1:], np.float32)
+    for i, c in enumerate(pattern):
+        dy, dx = i // 2, i % 2
+        out[dy::2, dx::2] = rgb["RGB".index(c), dy::2, dx::2]
+    return out
+
+
+def write_frames(folder: Path, n_light: int = 6, n_dark: int = 3, size=(120, 160),
+                 bayer: str | None = None) -> tuple[list[Path], list[Path]]:
+    """天文相機的 light（星點稍微位移；最後一張星點拉長、比較糊）與 dark，ADU、16-bit 範圍的 FITS。
+    bayer：彩色相機（OSC）的排列（例如 "RGGB"）；None＝單色。彩色時星點有各自的顏色，header 寫 BAYERPAT。"""
     folder.mkdir(parents=True, exist_ok=True)
     h, w = size
     lights, darks = [], []
     for i in range(n_light):
         bad = i == n_light - 1
-        img = star_field(h, w, 1, n=45, seed=11, sky=0.03, noise=0.0015, gradient=0.005,
-                         shift=(0.7 * i, -0.5 * i), fwhm=4.0 if bad else 2.6, elong=1.8 if bad else ELONG)[0]
+        img = star_field(h, w, 3 if bayer else 1, n=45, seed=11, sky=0.03, noise=0.0015, gradient=0.005,
+                         shift=(0.7 * i, -0.5 * i), fwhm=4.0 if bad else 2.6, elong=1.8 if bad else ELONG)
+        img = mosaic(img, bayer) if bayer else img[0]
         rng = np.random.default_rng(100 + i)
         data = (img * 40000 + 800 + rng.normal(0, 6, img.shape)).astype(np.float32)
         hdr = fits.Header()
         hdr.update(IMAGETYP="Light Frame", EXPTIME=120.0, FILTER="L", INSTRUME="TestCam", GAIN=100,
                    OFFSET=10, **{"CCD-TEMP": -10.0}, XBINNING=1, YBINNING=1, XPIXSZ=3.76, FOCALLEN=400.0,
                    OBJECT="Test", ROWORDER="TOP-DOWN", **{"DATE-OBS": f"2026-11-01T20:{10 + 3 * i:02d}:00"})
+        if bayer:
+            hdr.update(BAYERPAT=bayer, XBAYROFF=0, YBAYROFF=0)
+            del hdr["FILTER"]
         p = folder / f"light_{i:03d}.fits"
         fits.PrimaryHDU(data, hdr).writeto(p, overwrite=True)
         lights.append(p)
